@@ -2540,10 +2540,6 @@ impl<'a> SitArsenicDecoder<'a> {
                     }
                 }
             }
-
-            if self.decoder.next_symbol(&mut initial_model) != 0 {
-                break;
-            }
         }
 
         Ok(output)
