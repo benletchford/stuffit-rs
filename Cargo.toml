@@ -1,6 +1,6 @@
 [package]
 name = "stuffit"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["Ben Letchford <ben@letchford.cloud>"]
 description = "StuffIt (.sit) archive parser, decompressor, and creator"
@@ -16,6 +16,7 @@ thiserror = "2.0"
 flate2 = "1.0"
 encoding_rs = "0.8.35"
 md5 = "0.7"
+rayon = "1.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
@@ -36,3 +37,7 @@ cli = ["dep:clap"]
 version = "4"
 features = ["derive"]
 optional = true
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

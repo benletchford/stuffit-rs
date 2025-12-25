@@ -27,6 +27,7 @@ fn test_write_read_m0_store() {
         rsrc_method: 0,
         data_ulen: 0,
         rsrc_ulen: 0,
+        ..Default::default()
     };
     archive.entries.push(entry);
 
@@ -38,7 +39,8 @@ fn test_write_read_m0_store() {
     
     assert_eq!(parsed.entries.len(), 1);
     assert_eq!(parsed.entries[0].name, entry_name);
-    assert_eq!(parsed.entries[0].data_fork, content);
+    let (data, _) = parsed.entries[0].decompressed_forks().expect("Should decompress");
+    assert_eq!(data, content);
     assert_eq!(parsed.entries[0].data_method, 0);
 }
 
@@ -61,6 +63,7 @@ fn test_write_read_m13_compressed() {
         rsrc_method: 0,
         data_ulen: 0,
         rsrc_ulen: 0,
+        ..Default::default()
     };
     archive.entries.push(entry);
 
@@ -72,7 +75,8 @@ fn test_write_read_m13_compressed() {
 
     assert_eq!(parsed.entries.len(), 1);
     assert_eq!(parsed.entries[0].name, entry_name);
-    assert_eq!(parsed.entries[0].data_fork, content);
+    let (data, _) = parsed.entries[0].decompressed_forks().expect("Should decompress");
+    assert_eq!(data, content);
     // Note: data_method might be 13 (SIT13)
     // If content was too small, it might have fell back to uncompressed? 
     // But our encoder usually forces the method unless we implemented smart fallback.
@@ -142,7 +146,8 @@ fn test_write_read_method_14_deflate() {
     let out_entry = &parsed.entries[0];
     
     assert_eq!(out_entry.name, "test_deflate.txt");
-    assert_eq!(out_entry.data_fork, original_data);
+    let (data, _) = out_entry.decompressed_forks().expect("Should decompress");
+    assert_eq!(data, original_data);
     // Ideally check that the method was actually recorded as 14, 
     // but SitEntry.data_method masks it.
     assert_eq!(out_entry.data_method & 0x0F, 14); 
@@ -240,6 +245,7 @@ fn test_write_read_method_15_bwt() {
     let out_entry = &parsed.entries[0];
     
     assert_eq!(out_entry.name, "test_bwt.txt");
-    assert_eq!(out_entry.data_fork, original_data);
+    let (data, _) = out_entry.decompressed_forks().expect("Should decompress");
+    assert_eq!(data, original_data);
     assert_eq!(out_entry.data_method & 0x0F, 15); 
 }

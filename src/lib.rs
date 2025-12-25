@@ -107,19 +107,32 @@ pub struct SitArchive {
     pub entries: Vec<SitEntry>,
 }
 
+/// Archive format for decompression method selection
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ArchiveFormat {
+    /// SIT5 format (StuffIt 5.x)
+    #[default]
+    Sit5,
+    /// Classic SIT! format (StuffIt 1.x-4.x)
+    Classic,
+}
+
 /// A single entry (file or folder) in a StuffIt archive.
 ///
 /// Each entry can have both a data fork and a resource fork, following
 /// the classic Macintosh file system conventions.
+/// 
+/// By default, entries are stored in compressed form for lazy decompression.
+/// Call `decompress()` to get the uncompressed data.
 #[derive(Debug, Clone, Default)]
 pub struct SitEntry {
     /// Name of the file or folder (may include path separators for nested items).
     pub name: String,
 
-    /// Data fork content (the main file data).
+    /// Data fork content (compressed if is_compressed is true).
     pub data_fork: Vec<u8>,
 
-    /// Resource fork content (Macintosh-specific metadata and resources).
+    /// Resource fork content (compressed if is_compressed is true).
     pub resource_fork: Vec<u8>,
 
     /// Macintosh file type code (e.g., `b"TEXT"`, `b"APPL"`).
@@ -145,6 +158,45 @@ pub struct SitEntry {
 
     /// Macintosh Finder flags (e.g., invisible, has custom icon).
     pub finder_flags: u16,
+    
+    /// Whether the fork data is still compressed (for lazy decompression).
+    pub is_compressed: bool,
+    
+    /// Archive format (determines which decompressor to use).
+    pub format: ArchiveFormat,
+}
+
+impl SitEntry {
+    /// Decompress the entry's forks if they are still compressed.
+    /// Returns the decompressed data fork and resource fork.
+    /// 
+    /// This method is designed to be called from parallel contexts.
+    pub fn decompressed_forks(&self) -> Result<(Vec<u8>, Vec<u8>), SitError> {
+        if !self.is_compressed {
+            // Already decompressed
+            return Ok((self.data_fork.clone(), self.resource_fork.clone()));
+        }
+        
+        let data = if self.data_fork.is_empty() {
+            Vec::new()
+        } else {
+            match self.format {
+                ArchiveFormat::Sit5 => decompress_sit5(&self.data_fork, self.data_method, self.data_ulen as usize)?,
+                ArchiveFormat::Classic => decompress_classic(&self.data_fork, self.data_method, self.data_ulen as usize)?,
+            }
+        };
+        
+        let rsrc = if self.resource_fork.is_empty() {
+            Vec::new()
+        } else {
+            match self.format {
+                ArchiveFormat::Sit5 => decompress_sit5(&self.resource_fork, self.rsrc_method, self.rsrc_ulen as usize)?,
+                ArchiveFormat::Classic => decompress_classic(&self.resource_fork, self.rsrc_method, self.rsrc_ulen as usize)?,
+            }
+        };
+        
+        Ok((data, rsrc))
+    }
 }
 
 /// IBM CRC16 algorithm (polynomial 0xA001, reflected)
@@ -713,6 +765,8 @@ impl SitArchive {
                     data_ulen: 0,
                     rsrc_ulen: 0,
                     finder_flags,
+                    is_compressed: false,
+                    format: ArchiveFormat::Classic,
                 });
 
                 curr_path.push(name);
@@ -772,19 +826,14 @@ impl SitArchive {
                 format!("{}/{}", curr_path.join("/"), name)
             };
 
-            // Data follows header: resource fork first, then data fork
+            // Store compressed data for lazy decompression
             let data_start = cursor.position() as usize;
 
             let rsrc_data = if rsrc_clen > 0 {
                 if data_start + rsrc_clen as usize > data.len() {
                     return Err(SitError::Malformed);
                 }
-                let actual_method = rsrc_method & STUFFIT_METHOD_MASK;
-                decompress_classic(
-                    &data[data_start..data_start + rsrc_clen as usize],
-                    actual_method,
-                    rsrc_ulen as usize,
-                )?
+                data[data_start..data_start + rsrc_clen as usize].to_vec()
             } else {
                 Vec::new()
             };
@@ -794,12 +843,7 @@ impl SitArchive {
                 if data_fork_start + data_clen as usize > data.len() {
                     return Err(SitError::Malformed);
                 }
-                let actual_method = data_method & STUFFIT_METHOD_MASK;
-                decompress_classic(
-                    &data[data_fork_start..data_fork_start + data_clen as usize],
-                    actual_method,
-                    data_ulen as usize,
-                )?
+                data[data_fork_start..data_fork_start + data_clen as usize].to_vec()
             } else {
                 Vec::new()
             };
@@ -821,6 +865,8 @@ impl SitArchive {
                 data_ulen,
                 rsrc_ulen,
                 finder_flags,
+                is_compressed: true,
+                format: ArchiveFormat::Classic,
             });
         }
 
@@ -1006,6 +1052,8 @@ impl SitArchive {
                     data_ulen: 0,
                     rsrc_ulen: 0,
                     finder_flags,
+                    is_compressed: false,
+                    format: ArchiveFormat::Sit5,
                 });
                 num_total_entries += dir_files as usize;
                 // For directories, data_ulen points to first child entry
@@ -1015,16 +1063,13 @@ impl SitArchive {
             } else {
                 let data_start = cursor.position();
 
+                // Store compressed data for lazy decompression
                 let r_data = if has_rsrc && rsrc_clen > 0 {
                     let pos = data_start as usize;
                     if pos + rsrc_clen as usize > data.len() {
                         return Err(SitError::Malformed);
                     }
-                    decompress_sit5(
-                        &data[pos..pos + rsrc_clen as usize],
-                        rsrc_meth,
-                        rsrc_ulen as usize,
-                    )?
+                    data[pos..pos + rsrc_clen as usize].to_vec()
                 } else {
                     Vec::new()
                 };
@@ -1034,11 +1079,7 @@ impl SitArchive {
                     if pos + data_clen as usize > data.len() {
                         return Err(SitError::Malformed);
                     }
-                    decompress_sit5(
-                        &data[pos..pos + data_clen as usize],
-                        data_meth,
-                        data_ulen as usize,
-                    )?
+                    data[pos..pos + data_clen as usize].to_vec()
                 } else {
                     Vec::new()
                 };
@@ -1055,6 +1096,8 @@ impl SitArchive {
                     data_ulen,
                     rsrc_ulen,
                     finder_flags,
+                    is_compressed: true,
+                    format: ArchiveFormat::Sit5,
                 });
 
                 cursor.seek(SeekFrom::Start(
@@ -2483,16 +2526,40 @@ impl<'a> SitArsenicDecoder<'a> {
             }
 
             let mut transform = vec![0usize; block.len()];
-            let mut counts = [0usize; 256];
-            for &b in &block {
-                counts[b as usize] += 1;
+            
+            // Optimized 4-way parallel histogram to reduce cache conflicts
+            let mut counts0 = [0usize; 256];
+            let mut counts1 = [0usize; 256];
+            let mut counts2 = [0usize; 256];
+            let mut counts3 = [0usize; 256];
+            
+            let chunks = block.chunks_exact(4);
+            let remainder = chunks.remainder();
+            for chunk in chunks {
+                counts0[chunk[0] as usize] += 1;
+                counts1[chunk[1] as usize] += 1;
+                counts2[chunk[2] as usize] += 1;
+                counts3[chunk[3] as usize] += 1;
             }
+            for &b in remainder {
+                counts0[b as usize] += 1;
+            }
+            
+            // Merge counts
+            let mut counts = [0usize; 256];
+            for i in 0..256 {
+                counts[i] = counts0[i] + counts1[i] + counts2[i] + counts3[i];
+            }
+            
+            // Compute prefix sums
             let mut sum = 0usize;
             let mut start_pos = [0usize; 256];
             for i in 0..256 {
                 start_pos[i] = sum;
                 sum += counts[i];
             }
+            
+            // Build transform vector
             let mut current_pos_in_counts = start_pos;
             for (i, &b) in block.iter().enumerate() {
                 transform[current_pos_in_counts[b as usize]] = i;
@@ -2797,7 +2864,8 @@ mod tests {
 
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].name, "compress.txt");
-        assert_eq!(parsed.entries[0].data_fork, content);
+        let (data, _rsrc) = parsed.entries[0].decompressed_forks().expect("Should decompress");
+        assert_eq!(data, content);
 
         // Verify compression actually happened (compressed smaller than uncompressed)
         let uncompressed = archive.serialize().expect("Should serialize uncompressed");
@@ -2985,14 +3053,16 @@ mod tests {
             .iter()
             .find(|e| e.name == "repetitive.txt")
             .unwrap();
-        assert_eq!(rep.data_fork, repetitive);
+        let (rep_data, _) = rep.decompressed_forks().expect("Should decompress");
+        assert_eq!(rep_data, repetitive);
 
         let mix = parsed
             .entries
             .iter()
             .find(|e| e.name == "mixed.bin")
             .unwrap();
-        assert_eq!(mix.data_fork, mixed);
+        let (mix_data, _) = mix.decompressed_forks().expect("Should decompress");
+        assert_eq!(mix_data, mixed);
     }
 
     #[test]

@@ -1,8 +1,10 @@
 use clap::Parser;
+use rayon::prelude::*;
 use stuffit::{SitArchive, SitEntry};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Parser, Debug)]
 #[command(name = "stuffit")]
@@ -78,8 +80,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("Unarchiving {} entries...", archive.entries.len());
 
+            // First pass: create all directories sequentially (must happen before files)
             for entry in &archive.entries {
-                extract_entry(&output_base, entry, verbose)?;
+                if entry.is_folder {
+                    extract_entry(&output_base, entry, verbose)
+                        .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+                }
+            }
+
+            // Second pass: extract files in parallel
+            let errors = AtomicUsize::new(0);
+            archive.entries.par_iter().for_each(|entry| {
+                if !entry.is_folder {
+                    if let Err(e) = extract_entry(&output_base, entry, verbose) {
+                        eprintln!("Error extracting {}: {}", entry.name, e);
+                        errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            });
+
+            if errors.load(Ordering::Relaxed) > 0 {
+                eprintln!("Warning: {} files failed to extract", errors.load(Ordering::Relaxed));
             }
         }
         Commands::Archive {
@@ -245,7 +266,7 @@ fn add_to_archive(
     Ok(())
 }
 
-fn extract_entry(base: &Path, entry: &SitEntry, verbose: bool) -> std::io::Result<()> {
+fn extract_entry(base: &Path, entry: &SitEntry, verbose: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut name = entry.name.clone();
 
     // Handle special "Icon" file used for folder icons in Classic Mac OS
@@ -272,12 +293,15 @@ fn extract_entry(base: &Path, entry: &SitEntry, verbose: bool) -> std::io::Resul
             apply_finder_info(&path, &info);
         }
     } else {
+        // Decompress the forks (this is where parallel work happens)
+        let (data_fork, resource_fork) = entry.decompressed_forks()?;
+        
         if verbose {
             println!(
                 "  File: {} (data: {} bytes, rsrc: {} bytes, type: {:?}, creator: {:?}, flags: 0x{:04x})",
                 entry.name,
-                entry.data_fork.len(),
-                entry.resource_fork.len(),
+                data_fork.len(),
+                resource_fork.len(),
                 String::from_utf8_lossy(&entry.file_type),
                 String::from_utf8_lossy(&entry.creator),
                 entry.finder_flags
@@ -298,9 +322,9 @@ fn extract_entry(base: &Path, entry: &SitEntry, verbose: bool) -> std::io::Resul
         }
 
         // Write data fork
-        if !entry.data_fork.is_empty() {
+        if !data_fork.is_empty() {
             let mut file = fs::File::create(&path)?;
-            file.write_all(&entry.data_fork)?;
+            file.write_all(&data_fork)?;
         } else {
             fs::File::create(&path)?;
         }
@@ -308,9 +332,9 @@ fn extract_entry(base: &Path, entry: &SitEntry, verbose: bool) -> std::io::Resul
         // Write resource fork and metadata
         #[cfg(target_os = "macos")]
         {
-            if !entry.resource_fork.is_empty() {
+            if !resource_fork.is_empty() {
                 let rsrc_path = path.join("..namedfork/rsrc");
-                let _ = fs::write(&rsrc_path, &entry.resource_fork);
+                let _ = fs::write(&rsrc_path, &resource_fork);
             }
 
             let mut info = [0u8; 32];
@@ -323,14 +347,14 @@ fn extract_entry(base: &Path, entry: &SitEntry, verbose: bool) -> std::io::Resul
 
         #[cfg(not(target_os = "macos"))]
         {
-            if !entry.resource_fork.is_empty() {
+            if !resource_fork.is_empty() {
                 let mut raw_rsrc_path = path.clone();
                 let mut filename = raw_rsrc_path.file_name().unwrap().to_os_string();
                 filename.push(".rsrc");
                 raw_rsrc_path.set_file_name(filename);
 
                 let mut rsrc_file = fs::File::create(&raw_rsrc_path)?;
-                rsrc_file.write_all(&entry.resource_fork)?;
+                rsrc_file.write_all(&resource_fork)?;
             }
         }
     }

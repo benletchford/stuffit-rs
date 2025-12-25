@@ -84,7 +84,8 @@ fn test_read_method_1_rle() {
     
     assert_eq!(entry.data_method, 1);
     assert_eq!(entry.data_ulen, 6);
-    assert_eq!(entry.data_fork, b"ABBBBB");
+    let (data, _) = entry.decompressed_forks().expect("Should decompress");
+    assert_eq!(data, b"ABBBBB");
 }
 
 
@@ -295,7 +296,8 @@ fn test_read_method_2_lzw() {
     let archive = SitArchive::parse(&data).expect("Failed to parse LZW archive");
     let entry = &archive.entries[0];
     assert_eq!(entry.data_method, 2);
-    assert_eq!(entry.data_fork, original_data, "Internal LZW decoder failed to match original data");
+    let (data, _) = entry.decompressed_forks().expect("Should decompress");
+    assert_eq!(data, original_data, "Internal LZW decoder failed to match original data");
 }
 
 #[test]
