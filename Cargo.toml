@@ -1,0 +1,38 @@
+[package]
+name = "stuffit"
+version = "0.1.1"
+edition = "2021"
+authors = ["Ben Letchford <ben@letchford.cloud>"]
+description = "StuffIt (.sit) archive parser, decompressor, and creator"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/benletchford/stuffit-rs"
+keywords = ["stuffit", "sit", "archive", "compression", "macintosh"]
+categories = ["compression", "encoding", "parser-implementations"]
+readme = "README.md"
+
+[dependencies]
+log = "0.4"
+thiserror = "2.0"
+flate2 = "1.0"
+encoding_rs = "0.8.35"
+md5 = "0.7"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# No dev dependencies needed yet
+
+[[bin]]
+name = "stuffit"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:clap"]
+
+[dependencies.clap]
+version = "4"
+features = ["derive"]
+optional = true
