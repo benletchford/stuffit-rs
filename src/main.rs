@@ -1,10 +1,10 @@
 use clap::Parser;
 use rayon::prelude::*;
-use stuffit::{SitArchive, SitEntry};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use stuffit::{SitArchive, SitEntry};
 
 #[derive(Parser, Debug)]
 #[command(name = "stuffit")]
@@ -16,6 +16,15 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Commands {
+    /// List the contents of a StuffIt (.sit) file
+    List {
+        /// Path to the StuffIt (.sit) file
+        input: String,
+
+        /// Show detailed information
+        #[arg(short, long)]
+        verbose: bool,
+    },
     /// Extract a StuffIt (.sit) file
     Extract {
         /// Path to the StuffIt (.sit) file
@@ -52,6 +61,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     match args.command {
+        Commands::List { input, verbose } => {
+            let input_path = Path::new(&input);
+            if !input_path.exists() {
+                eprintln!("Error: File not found: {}", input);
+                std::process::exit(1);
+            }
+
+            let data = fs::read(input_path)?;
+            let archive = SitArchive::parse(&data)?;
+
+            // Determine format
+            let format_str = if &data[0..4] == b"SIT!" {
+                "SIT! 1.x"
+            } else {
+                "StuffIt 5.0"
+            };
+
+            println!("Archive: {}", input);
+            println!("Format: {}", format_str);
+            println!("Entries: {}", archive.entries.len());
+            println!();
+
+            if verbose {
+                // Detailed output with table format
+                println!(
+                    "{:<50} {:<8} {:<10} {:<10} {:<6} {:<6}",
+                    "Name", "Type", "Data", "Resource", "Type", "Creator"
+                );
+                println!("{}", "-".repeat(100));
+
+                for entry in &archive.entries {
+                    let entry_type = if entry.is_folder { "Folder" } else { "File" };
+                    let data_size = if entry.is_compressed {
+                        format!("{}*", entry.data_ulen)
+                    } else {
+                        entry.data_fork.len().to_string()
+                    };
+                    let rsrc_size = if entry.is_compressed {
+                        format!("{}*", entry.rsrc_ulen)
+                    } else {
+                        entry.resource_fork.len().to_string()
+                    };
+
+                    let file_type = String::from_utf8_lossy(&entry.file_type);
+                    let creator = String::from_utf8_lossy(&entry.creator);
+
+                    println!(
+                        "{:<50} {:<8} {:<10} {:<10} {:<6} {:<6}",
+                        entry.name, entry_type, data_size, rsrc_size, file_type, creator
+                    );
+                }
+
+                if archive.entries.iter().any(|e| e.is_compressed) {
+                    println!();
+                    println!("* = compressed size (use data_ulen/rsrc_ulen for uncompressed)");
+                }
+            } else {
+                // Simple output: just names
+                for entry in &archive.entries {
+                    let indicator = if entry.is_folder { "/" } else { "" };
+                    println!("{}{}", entry.name, indicator);
+                }
+            }
+        }
         Commands::Extract {
             input,
             output,
@@ -100,7 +173,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             if errors.load(Ordering::Relaxed) > 0 {
-                eprintln!("Warning: {} files failed to extract", errors.load(Ordering::Relaxed));
+                eprintln!(
+                    "Warning: {} files failed to extract",
+                    errors.load(Ordering::Relaxed)
+                );
             }
         }
         Commands::Archive {
@@ -266,7 +342,11 @@ fn add_to_archive(
     Ok(())
 }
 
-fn extract_entry(base: &Path, entry: &SitEntry, verbose: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn extract_entry(
+    base: &Path,
+    entry: &SitEntry,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut name = entry.name.clone();
 
     // Handle special "Icon" file used for folder icons in Classic Mac OS
@@ -295,7 +375,7 @@ fn extract_entry(base: &Path, entry: &SitEntry, verbose: bool) -> Result<(), Box
     } else {
         // Decompress the forks (this is where parallel work happens)
         let (data_fork, resource_fork) = entry.decompressed_forks()?;
-        
+
         if verbose {
             println!(
                 "  File: {} (data: {} bytes, rsrc: {} bytes, type: {:?}, creator: {:?}, flags: 0x{:04x})",

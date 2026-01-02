@@ -71,6 +71,16 @@ let compressed = archive.serialize_compressed()?;
 
 The crate includes a command-line tool (`stuffit`) for working with StuffIt archives.
 
+### List archive contents
+
+```bash
+# Simple list (just names)
+stuffit list archive.sit
+
+# Detailed list with metadata
+stuffit list archive.sit --verbose
+```
+
 ### Extract an archive
 
 ```bash
@@ -89,7 +99,7 @@ stuffit archive -o output.sit file1.txt folder/ -m 0
 
 ### Options
 
-- `-v, --verbose` - Show detailed progress
+- `-v, --verbose` - Show detailed progress or information
 - `-o, --output` - Specify output path
 - `-m, --method` - Compression method (0=none, 13=compressed)
 
