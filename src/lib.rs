@@ -1452,6 +1452,7 @@ impl<'a> BitReader<'a> {
         res
     }
 
+
     fn read_byte(&mut self) -> u8 {
         self.read_bits_le(8) as u8
     }
@@ -1987,6 +1988,12 @@ fn alloc_and_parse_huffman_code(
 }
 
 // --- StuffIt 3 (Huffman) Implementation ---
+//
+// Tree format (XADStuffItHuffmanHandle.m from The Unarchiver):
+//   Read bits big-endian (MSB first).
+//   bit=1 → leaf node; next 8 bits (BE) are the symbol value.
+//   bit=0 → internal node; recursively build 0-branch then 1-branch.
+// Symbols are decoded using the same BE bit order.
 
 struct SitHuffmanDecoder<'a> {
     reader: BitReader<'a>,
@@ -1999,41 +2006,60 @@ impl<'a> SitHuffmanDecoder<'a> {
         }
     }
 
+    fn parse_tree(reader: &mut BitReader, tree: &mut Vec<[i32; 2]>, node: usize) {
+        if tree.len() > 512 {
+            return;
+        }
+        if reader.read_bit_be() {
+            let sym = (0..8).fold(0i32, |acc, _| (acc << 1) | (reader.read_bit_be() as i32));
+            tree[node][0] = sym;
+            tree[node][1] = sym;
+        } else {
+            let left = tree.len() as i32;
+            tree[node][0] = left;
+            tree.push([i32::MIN, i32::MIN]);
+            Self::parse_tree(reader, tree, left as usize);
+
+            let right = tree.len() as i32;
+            tree[node][1] = right;
+            tree.push([i32::MIN, i32::MIN]);
+            Self::parse_tree(reader, tree, right as usize);
+        }
+    }
+
+    fn decode_be(tree: &[[i32; 2]], reader: &mut BitReader) -> i32 {
+        let mut node = 0usize;
+        loop {
+            if tree[node][0] == tree[node][1] {
+                return tree[node][0];
+            }
+            let bit = reader.read_bit_be() as usize;
+            let next = tree[node][bit];
+            if next < 0 {
+                return -1;
+            }
+            node = next as usize;
+            if node >= tree.len() {
+                return -1;
+            }
+        }
+    }
+
     fn decompress(&mut self, uncomp_len: usize) -> Result<Vec<u8>, SitError> {
         let mut output = Vec::with_capacity(uncomp_len);
         if uncomp_len == 0 {
             return Ok(output);
         }
 
-        // Method 3 starts with the Huffman tree definition
-        // Uses the same meta-code structure as Method 13 (SIT13)
-        // Meta-code is fixed?
-        // Wait, Method 3 uses a dynamic Huffman tree for literals (0-255).
-        // The tree structure is similar to the "First Code" in SIT13.
-        // It uses the same "Meta Code" table to decode the tree lengths.
-
-        let metacode = HuffmanDecoder::from_explicit_codes(&META_CODES, &META_CODE_LENGTHS, 37);
-        // Code 256 is End of Block? Or just process until uncomp_len.
-        // Method 3 usually just encodes literals 0-255. No match/length codes.
-        // So we need tree for 256 symbols (0-255).
-        // Let's assume num_symbols = 256 (or more if there is an EOF code?)
-        // The Unarchiver: XADStuffItHuffmanHandle.m -> numSymbols = 256. (actually 257? EOF?)
-        // Wait, Unarchiver says: _huffman = [[self allocAndParseHuffmanCodeWithNumCodes:256 metaCode:_metaCode] retain];
-        // So 256 symbols.
-
-        let huffman = alloc_and_parse_huffman_code(&mut self.reader, 256, &metacode)?;
+        let mut tree: Vec<[i32; 2]> = vec![[i32::MIN, i32::MIN]];
+        Self::parse_tree(&mut self.reader, &mut tree, 0);
 
         while output.len() < uncomp_len {
-            let val = huffman.decode_le(&mut self.reader);
+            let val = Self::decode_be(&tree, &mut self.reader);
             if val < 0 {
                 break;
             }
-            if val < 256 {
-                output.push(val as u8);
-            } else {
-                // Should not happen for Method 3 if only 256 codes
-                break;
-            }
+            output.push(val as u8);
         }
 
         Ok(output)

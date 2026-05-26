@@ -423,6 +423,36 @@ mod encoding {
 mod fixtures {
     use super::*;
 
+    /// Regression test for Snap_2.1.sit: Huffman (method 3) decompression
+    /// previously panicked with "index out of bounds: the len is 129 but the
+    /// index is 150" because SitHuffmanDecoder incorrectly used the meta-code
+    /// scheme (used by method 13) instead of the correct recursive BE bit-tree
+    /// format (bit=1 → leaf+8-bit symbol, bit=0 → internal node).
+    #[test]
+    fn test_snap_2_1_sit_huffman_no_panic() {
+        let path = Path::new(FIXTURES_DIR).join("Snap_2.1.sit");
+        let data = fs::read(&path).expect("Snap_2.1.sit fixture missing");
+        let archive = SitArchive::parse(&data).expect("Failed to parse Snap_2.1.sit");
+        assert!(!archive.entries.is_empty(), "Expected at least one entry");
+
+        // Find the "Read Me First" entry (method 3, data_ulen=2310)
+        let readme = archive
+            .entries
+            .iter()
+            .find(|e| e.name.contains("Read Me First") && e.data_method == 3);
+        let readme = readme.expect("Read Me First entry not found");
+        let (decompressed, _) = readme
+            .decompressed_forks()
+            .expect("Method 3 decompression failed");
+        assert_eq!(decompressed.len(), 2310, "Wrong decompressed size");
+        // The file is a plain-text README — verify it starts with expected content
+        assert!(
+            decompressed.starts_with(b"--NAME OF APPLICATION: Snap"),
+            "Unexpected content: {:?}",
+            &decompressed[..40]
+        );
+    }
+
     /// Test parsing external fixtures (manual_*.sit files)
     ///
     /// These are archives created by external tools for validation.
