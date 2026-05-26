@@ -365,14 +365,28 @@ mod legacy_compression {
         assert_eq!(decompressed, original_data);
     }
 
-    /// Placeholder for Method 3 (Huffman)
+    /// Regression test for method 3 Huffman streams.
     ///
-    /// Huffman uses the same "Meta Code" table as Method 13, which is already
-    /// tested in the roundtrip::test_method_13_compressed test.
+    /// Method 3 stores a recursive big-endian bit tree, not the method 13
+    /// meta-code length table. The previous decoder tried to parse this payload
+    /// as method 13 metadata and panicked while constructing an invalid Huffman
+    /// table. The fixture is a one-entry classic SIT archive whose data fork is
+    /// a single-leaf tree for ASCII 'A' followed by no additional symbol bits.
     #[test]
-    fn test_method_3_huffman() {
-        // Huffman logic is shared with Method 13 and already covered
-        // Constructing a manual Huffman-encoded fixture is complex
+    fn test_method_3_huffman_recursive_be_tree_no_panic() {
+        let path = Path::new(FIXTURES_DIR).join("test_m3_huffman.sit");
+        let data = fs::read(&path).expect("test_m3_huffman.sit fixture missing");
+        let archive = SitArchive::parse(&data).expect("Failed to parse Huffman archive");
+
+        assert_eq!(archive.entries.len(), 1);
+        assert_eq!(archive.entries[0].name, "huff.txt");
+        assert_eq!(archive.entries[0].data_method, 3);
+        assert_eq!(archive.entries[0].data_fork, [0xA0, 0x80]);
+
+        let (decompressed, _) = archive.entries[0]
+            .decompressed_forks()
+            .expect("Should decompress method 3 Huffman data");
+        assert_eq!(decompressed, b"AAAAAAAA");
     }
 }
 
