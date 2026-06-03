@@ -25,10 +25,10 @@ mod utils {
         crc
     }
 
-    /// Helper for writing variable-length bit sequences (big-endian)
+    /// Helper for writing variable-length bit sequences (little-endian)
     pub struct BitWriter {
         data: Vec<u8>,
-        bit_buf: u32,
+        bit_buf: u64,
         bits_in_buf: u32,
     }
 
@@ -41,21 +41,21 @@ mod utils {
             }
         }
 
-        pub fn write_bits_be(&mut self, val: u32, n: u32) {
-            let val = val & ((1 << n) - 1);
-            self.bit_buf = (self.bit_buf << n) | val;
+        pub fn write_bits_le(&mut self, val: u32, n: u32) {
+            let val = val as u64 & ((1u64 << n) - 1);
+            self.bit_buf |= val << self.bits_in_buf;
             self.bits_in_buf += n;
             while self.bits_in_buf >= 8 {
-                let byte = (self.bit_buf >> (self.bits_in_buf - 8)) as u8;
+                let byte = self.bit_buf as u8;
                 self.data.push(byte);
+                self.bit_buf >>= 8;
                 self.bits_in_buf -= 8;
             }
         }
 
         pub fn flush(&mut self) {
             if self.bits_in_buf > 0 {
-                let byte = (self.bit_buf << (8 - self.bits_in_buf)) as u8;
-                self.data.push(byte);
+                self.data.push(self.bit_buf as u8);
                 self.bits_in_buf = 0;
                 self.bit_buf = 0;
             }
@@ -69,9 +69,20 @@ mod utils {
 
     /// Simple LZW encoder for testing Method 2 (LZW) archives
     pub fn lzw_encode(data: &[u8]) -> Vec<u8> {
+        let mut writer = BitWriter::new();
+        for block in data.chunks(10) {
+            lzw_encode_block(block, &mut writer);
+        }
+        writer.into_data()
+    }
+
+    fn lzw_encode_block(data: &[u8], writer: &mut BitWriter) {
         use std::collections::HashMap;
 
-        let mut writer = BitWriter::new();
+        if data.is_empty() {
+            return;
+        }
+
         let mut dict: HashMap<Vec<u8>, u32> = HashMap::new();
 
         // Initialize dictionary with single-byte sequences
@@ -79,16 +90,9 @@ mod utils {
             dict.insert(vec![i as u8], i as u32);
         }
 
-        let mut next_code = 258; // 256=Clear, 257=End
-        let mut code_size = 9;
-
-        // Write clear code
-        writer.write_bits_be(256, code_size);
-
-        if data.is_empty() {
-            writer.write_bits_be(257, code_size);
-            return writer.into_data();
-        }
+        let mut next_code = 257; // 256=end-of-block/reset marker
+        let mut code_size = 9u32;
+        let mut codes_in_block = 0u32;
 
         let mut current = vec![data[0]];
 
@@ -101,7 +105,8 @@ mod utils {
             } else {
                 // Emit code for current sequence
                 let code = *dict.get(&current).unwrap();
-                writer.write_bits_be(code, code_size);
+                writer.write_bits_le(code, code_size);
+                codes_in_block += 1;
 
                 // Add new sequence to dictionary
                 if next_code < 16384 {
@@ -109,7 +114,7 @@ mod utils {
                     next_code += 1;
 
                     // Increase bit width when needed
-                    if next_code == (1 << code_size) && code_size < 14 {
+                    if next_code.is_power_of_two() && next_code < 16384 && code_size < 14 {
                         code_size += 1;
                     }
                 }
@@ -121,12 +126,18 @@ mod utils {
         // Emit final sequence
         if !current.is_empty() {
             let code = *dict.get(&current).unwrap();
-            writer.write_bits_be(code, code_size);
+            writer.write_bits_le(code, code_size);
+            codes_in_block += 1;
         }
 
-        // Write end code
-        writer.write_bits_be(257, code_size);
-        writer.into_data()
+        writer.write_bits_le(256, code_size);
+        codes_in_block += 1;
+
+        if !codes_in_block.is_multiple_of(8) {
+            for _ in 0..(8 - (codes_in_block % 8)) {
+                writer.write_bits_le(0, code_size);
+            }
+        }
     }
 }
 

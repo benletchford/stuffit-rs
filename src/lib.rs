@@ -39,10 +39,10 @@
 //! std::fs::write("new_archive.sit", bytes).unwrap();
 //! ```
 
+use encoding_rs::MACINTOSH;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
-use encoding_rs::MACINTOSH;
 use log::{debug, warn};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use thiserror::Error;
@@ -121,7 +121,7 @@ pub enum ArchiveFormat {
 ///
 /// Each entry can have both a data fork and a resource fork, following
 /// the classic Macintosh file system conventions.
-/// 
+///
 /// By default, entries are stored in compressed form for lazy decompression.
 /// Call `decompress()` to get the uncompressed data.
 #[derive(Debug, Clone, Default)]
@@ -158,10 +158,10 @@ pub struct SitEntry {
 
     /// Macintosh Finder flags (e.g., invisible, has custom icon).
     pub finder_flags: u16,
-    
+
     /// Whether the fork data is still compressed (for lazy decompression).
     pub is_compressed: bool,
-    
+
     /// Archive format (determines which decompressor to use).
     pub format: ArchiveFormat,
 }
@@ -169,32 +169,44 @@ pub struct SitEntry {
 impl SitEntry {
     /// Decompress the entry's forks if they are still compressed.
     /// Returns the decompressed data fork and resource fork.
-    /// 
+    ///
     /// This method is designed to be called from parallel contexts.
     pub fn decompressed_forks(&self) -> Result<(Vec<u8>, Vec<u8>), SitError> {
         if !self.is_compressed {
             // Already decompressed
             return Ok((self.data_fork.clone(), self.resource_fork.clone()));
         }
-        
+
         let data = if self.data_fork.is_empty() {
             Vec::new()
         } else {
             match self.format {
-                ArchiveFormat::Sit5 => decompress_sit5(&self.data_fork, self.data_method, self.data_ulen as usize)?,
-                ArchiveFormat::Classic => decompress_classic(&self.data_fork, self.data_method, self.data_ulen as usize)?,
+                ArchiveFormat::Sit5 => {
+                    decompress_sit5(&self.data_fork, self.data_method, self.data_ulen as usize)?
+                }
+                ArchiveFormat::Classic => {
+                    decompress_classic(&self.data_fork, self.data_method, self.data_ulen as usize)?
+                }
             }
         };
-        
+
         let rsrc = if self.resource_fork.is_empty() {
             Vec::new()
         } else {
             match self.format {
-                ArchiveFormat::Sit5 => decompress_sit5(&self.resource_fork, self.rsrc_method, self.rsrc_ulen as usize)?,
-                ArchiveFormat::Classic => decompress_classic(&self.resource_fork, self.rsrc_method, self.rsrc_ulen as usize)?,
+                ArchiveFormat::Sit5 => decompress_sit5(
+                    &self.resource_fork,
+                    self.rsrc_method,
+                    self.rsrc_ulen as usize,
+                )?,
+                ArchiveFormat::Classic => decompress_classic(
+                    &self.resource_fork,
+                    self.rsrc_method,
+                    self.rsrc_ulen as usize,
+                )?,
             }
         };
-        
+
         Ok((data, rsrc))
     }
 }
@@ -480,7 +492,8 @@ impl SitArchive {
                     match method {
                         METHOD_SIT13 => Ok(compress_sit13(input)),
                         METHOD_DEFLATE => {
-                            let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+                            let mut encoder =
+                                DeflateEncoder::new(Vec::new(), Compression::default());
                             encoder.write_all(input).map_err(SitError::Io)?;
                             encoder
                                 .finish()
@@ -491,7 +504,10 @@ impl SitArchive {
                             // Fallback to uncompressed for unsupported methods or warn?
                             // For now, treat unknown methods as error or fallback.
                             // Given this is creating a NEW archive, erroring is safer.
-                            Err(SitError::Compression(format!("Unsupported write method: {}", method)))
+                            Err(SitError::Compression(format!(
+                                "Unsupported write method: {}",
+                                method
+                            )))
                         }
                     }
                 };
@@ -564,7 +580,7 @@ impl SitArchive {
     /// ```
     pub fn parse_segmented<P: AsRef<std::path::Path>>(paths: &[P]) -> Result<Self, SitError> {
         use std::fs;
-        
+
         if paths.is_empty() {
             return Err(SitError::Malformed);
         }
@@ -617,11 +633,13 @@ impl SitArchive {
         // SIT5 uses dual MD5 for password verification
         // 1. Binary MD5 of password
         // 2. Hex MD5 of first 5 bytes of (1), truncated to 10 chars
-        
+
         let binary_md5 = md5::compute(password.as_bytes());
         let first_five = &binary_md5[0..5];
-        let hex_string = format!("{:02x}{:02x}{:02x}{:02x}{:02x}", 
-            first_five[0], first_five[1], first_five[2], first_five[3], first_five[4]);
+        let hex_string = format!(
+            "{:02x}{:02x}{:02x}{:02x}{:02x}",
+            first_five[0], first_five[1], first_five[2], first_five[3], first_five[4]
+        );
         let final_hash = md5::compute(hex_string.as_bytes());
         let _password_hash: [u8; 10] = {
             let hex = format!("{:x}", final_hash);
@@ -635,17 +653,17 @@ impl SitArchive {
         // finding the password hash location in the header and verifying,
         // then XORing the encrypted data blocks with derived key
         // This is a simplified implementation that handles detection
-        
+
         Self::parse_sit5(data)
     }
 
     fn parse_classic_encrypted(data: &[u8], _password: &str) -> Result<Self, SitError> {
         // Classic SIT uses simple XOR with password bytes
         // The password is used to XOR the compressed data
-        
+
         // For now, just parse normally - full decryption would require
         // detecting encrypted entries and XORing data forks
-        
+
         Self::parse_sit_classic(data)
     }
 
@@ -1186,19 +1204,19 @@ fn decompress_rle(data: &[u8], uncomp_len: usize) -> Result<Vec<u8>, SitError> {
                     if output.len() >= uncomp_len {
                         break;
                     }
-                } 
-                // Wait, standard RLE in StuffIt is often: 
-                // 0x90 <count> <char> -> repeat char (count+1) times? 
+                }
+                // Wait, standard RLE in StuffIt is often:
+                // 0x90 <count> <char> -> repeat char (count+1) times?
                 // Or repeat char count times.
                 // The Unarchiver XADStuffItRLEHandle.m:
-                // if(c==0x90) { 
-                //    count = ReadByte(); 
-                //    if(count==0) Output(0x90); 
-                //    else { 
-                //      val = ReadByte(); 
-                //      for(j=0;j<count;j++) Output(val); 
-                //      // Note: XAD RLE sometimes repeats the *previous* char, but StuffIt 1.5.1 RLE 
-                //      // usually repeats the *next* char count times. 
+                // if(c==0x90) {
+                //    count = ReadByte();
+                //    if(count==0) Output(0x90);
+                //    else {
+                //      val = ReadByte();
+                //      for(j=0;j<count;j++) Output(val);
+                //      // Note: XAD RLE sometimes repeats the *previous* char, but StuffIt 1.5.1 RLE
+                //      // usually repeats the *next* char count times.
                 //      // Let's assume standard "marker count value".
                 //    }
                 // }
@@ -1214,10 +1232,10 @@ fn decompress_rle(data: &[u8], uncomp_len: usize) -> Result<Vec<u8>, SitError> {
 
 struct SitLZWDecoder<'a> {
     reader: BitReader<'a>,
-    // LZW State
     dictionary: Vec<Vec<u8>>,
     code_size: u32,
     next_code: u32,
+    codes_in_block: u32,
 }
 
 impl<'a> SitLZWDecoder<'a> {
@@ -1226,7 +1244,8 @@ impl<'a> SitLZWDecoder<'a> {
             reader: BitReader::new(data),
             dictionary: Self::init_dictionary(),
             code_size: 9,
-            next_code: 258, // 0-255 literals, 256 clear, 257 end
+            next_code: 257, // 0-255 literals, 256 block reset marker
+            codes_in_block: 0,
         }
     }
 
@@ -1235,83 +1254,86 @@ impl<'a> SitLZWDecoder<'a> {
         for i in 0..256 {
             dict.push(vec![i as u8]);
         }
-        dict.push(Vec::new()); // 256: Clear Code
-        dict.push(Vec::new()); // 257: End Code
+        dict.push(Vec::new()); // 256: end-of-block/reset marker
         dict
+    }
+
+    fn reset_block(&mut self) -> bool {
+        if !self.codes_in_block.is_multiple_of(8) {
+            let padding_codes = 8 - (self.codes_in_block % 8);
+            if !self.reader.skip_bits_le(self.code_size * padding_codes) {
+                return false;
+            }
+        }
+
+        self.dictionary = Self::init_dictionary();
+        self.code_size = 9;
+        self.next_code = 257;
+        self.codes_in_block = 0;
+        true
     }
 
     fn decompress(&mut self, uncomp_len: usize) -> Result<Vec<u8>, SitError> {
         let mut output = Vec::with_capacity(uncomp_len);
-        let mut old_code = 0xffff; // Invalid
-        
+        let mut old_code: Option<u32> = None;
+
         while output.len() < uncomp_len {
-             let code = self.reader.read_bits_be(self.code_size);
-             
-             if code == 256 {
-                 // Clear Code
-                 self.dictionary = Self::init_dictionary();
-                 self.code_size = 9;
-                 self.next_code = 258;
-                 
-                 let c = self.reader.read_bits_be(9); // Read next code immediately? 
-                 // Standard LZW: after clear, read next code which MUST be literal?
-                 // Let's assume standard behavior:
-                 if c == 257 {
-                     break; // End immediately after clear?
-                 }
-                 if c >= 256 {
-                     // Should be a literal after clear usually, but could be end
-                     continue; // Or error?
-                 }
-                 output.push(c as u8);
-                 old_code = c;
-                 continue;
-             }
-             
-             if code == 257 {
-                 // End Code
-                 break;
-             }
-             
-             let current_entry = if (code as usize) < self.dictionary.len() {
-                 self.dictionary[code as usize].clone()
-             } else if code == self.next_code {
-                 // Special case: old_code + old_code[0]
-                 if old_code == 0xffff {
-                     return Err(SitError::Decompression("LZW Error: First code is special".into()));
-                 }
-                 let mut seq = self.dictionary[old_code as usize].clone();
-                 seq.push(seq[0]);
-                 seq
-             } else {
-                 return Err(SitError::Decompression(format!("LZW Error: Invalid code {}", code)));
-             };
-             
-             output.extend_from_slice(&current_entry);
-             
-             // Add to dictionary
-             if old_code != 0xffff {
-                 let mut new_entry = self.dictionary[old_code as usize].clone();
-                 new_entry.push(current_entry[0]);
-                 
-                 if self.dictionary.len() < 16384 {
-                     self.dictionary.push(new_entry);
-                     self.next_code += 1;
-                     
-                     // Expansion
-                     // For StuffIt 1.5.1: "Early Change" ?
-                     // Usually expands when next_code hits 512, 1024, etc.
-                     // The check is often if next_code == (1 << code_size)
-                     // If we just added 511, next_code becomes 512.
-                     // If code_size is 9 (limit 512).
-                     // We need to switch to 10 bits for the NEXT code.
-                     if self.next_code >= (1 << self.code_size) && self.code_size < 14 {
-                         self.code_size += 1;
-                     }
-                 }
-             }
-             
-             old_code = code;
+            let Some(code) = self.reader.read_bits_le_checked(self.code_size) else {
+                break;
+            };
+            self.codes_in_block += 1;
+
+            if code == 256 {
+                if !self.reset_block() {
+                    break;
+                }
+                old_code = None;
+                continue;
+            }
+
+            let current_entry = if (code as usize) < self.dictionary.len() {
+                self.dictionary[code as usize].clone()
+            } else if code == self.next_code {
+                let Some(old_code) = old_code else {
+                    return Err(SitError::Decompression(
+                        "LZW Error: First code is special".into(),
+                    ));
+                };
+                let mut seq = self.dictionary[old_code as usize].clone();
+                seq.push(seq[0]);
+                seq
+            } else {
+                return Err(SitError::Decompression(format!(
+                    "LZW Error: Invalid code {}",
+                    code
+                )));
+            };
+
+            let remaining = uncomp_len - output.len();
+            if current_entry.len() > remaining {
+                output.extend_from_slice(&current_entry[..remaining]);
+                break;
+            }
+            output.extend_from_slice(&current_entry);
+
+            if let Some(old_code) = old_code {
+                let mut new_entry = self.dictionary[old_code as usize].clone();
+                new_entry.push(current_entry[0]);
+
+                if self.dictionary.len() < 16384 {
+                    self.dictionary.push(new_entry);
+                    self.next_code += 1;
+
+                    if self.next_code.is_power_of_two()
+                        && self.next_code < 16384
+                        && self.code_size < 14
+                    {
+                        self.code_size += 1;
+                    }
+                }
+            }
+
+            old_code = Some(code);
         }
         Ok(output)
     }
@@ -1383,6 +1405,34 @@ impl<'a> BitReader<'a> {
         res
     }
 
+    fn read_bits_le_checked(&mut self, n: u32) -> Option<u32> {
+        if n == 0 {
+            return Some(0);
+        }
+        self.fill_buf();
+        if self.bits_in_buf < n {
+            return None;
+        }
+        let res = (self.bit_buf & ((1u64 << n) - 1)) as u32;
+        self.bit_buf >>= n;
+        self.bits_in_buf -= n;
+        Some(res)
+    }
+
+    fn skip_bits_le(&mut self, mut n: u32) -> bool {
+        while n > 0 {
+            self.fill_buf();
+            if self.bits_in_buf == 0 {
+                return false;
+            }
+            let take = n.min(self.bits_in_buf);
+            self.bit_buf >>= take;
+            self.bits_in_buf -= take;
+            n -= take;
+        }
+        true
+    }
+
     fn read_bit_le(&mut self) -> bool {
         self.read_bits_le(1) != 0
     }
@@ -1399,17 +1449,6 @@ impl<'a> BitReader<'a> {
         }
         let res = (self.bit_buf & (1 << (self.bits_in_buf - 1))) != 0;
         self.bits_in_buf -= 1;
-        res
-    }
-
-    fn read_bits_be(&mut self, n: u32) -> u32 {
-        if n == 0 {
-            return 0;
-        }
-        let mut res = 0;
-        for _ in 0..n {
-             res = (res << 1) | (self.read_bit_be() as u32);
-        }
         res
     }
 
@@ -1972,7 +2011,7 @@ impl<'a> SitHuffmanDecoder<'a> {
         // Wait, Method 3 uses a dynamic Huffman tree for literals (0-255).
         // The tree structure is similar to the "First Code" in SIT13.
         // It uses the same "Meta Code" table to decode the tree lengths.
-        
+
         let metacode = HuffmanDecoder::from_explicit_codes(&META_CODES, &META_CODE_LENGTHS, 37);
         // Code 256 is End of Block? Or just process until uncomp_len.
         // Method 3 usually just encodes literals 0-255. No match/length codes.
@@ -1981,22 +2020,22 @@ impl<'a> SitHuffmanDecoder<'a> {
         // The Unarchiver: XADStuffItHuffmanHandle.m -> numSymbols = 256. (actually 257? EOF?)
         // Wait, Unarchiver says: _huffman = [[self allocAndParseHuffmanCodeWithNumCodes:256 metaCode:_metaCode] retain];
         // So 256 symbols.
-        
+
         let huffman = alloc_and_parse_huffman_code(&mut self.reader, 256, &metacode)?;
-        
+
         while output.len() < uncomp_len {
-             let val = huffman.decode_le(&mut self.reader);
-             if val < 0 {
-                 break;
-             }
-             if val < 256 {
-                 output.push(val as u8);
-             } else {
-                 // Should not happen for Method 3 if only 256 codes
-                 break; 
-             }
+            let val = huffman.decode_le(&mut self.reader);
+            if val < 0 {
+                break;
+            }
+            if val < 256 {
+                output.push(val as u8);
+            } else {
+                // Should not happen for Method 3 if only 256 codes
+                break;
+            }
         }
-        
+
         Ok(output)
     }
 }
@@ -2155,7 +2194,7 @@ impl ArithmeticEncoder {
 
     fn encode_symbol(&mut self, model: &mut ArithmeticModel, symbol: u16) {
         let sym_idx = (symbol - model.first_symbol) as usize;
-        
+
         let mut cumulative = 0u32;
         for i in 0..sym_idx {
             cumulative += model.frequencies[i] as u32;
@@ -2165,7 +2204,7 @@ impl ArithmeticEncoder {
 
         let renorm_factor = self.range / sym_tot;
         let low_incr = renorm_factor * cumulative;
-        
+
         self.low += low_incr;
         if cumulative + sym_size == sym_tot {
             self.range -= low_incr;
@@ -2206,13 +2245,13 @@ impl ArithmeticEncoder {
         } else {
             self.write_bit_plus_pending(true);
         }
-        
+
         // Flush bit buffer
         if self.bits_in_buf > 0 {
             self.bit_buf <<= 8 - self.bits_in_buf;
             self.data.push(self.bit_buf);
         }
-        
+
         self.data
     }
 }
@@ -2240,11 +2279,14 @@ impl SitArsenicEncoder {
         let mut initial_model = ArithmeticModel::new(0, 2, 1, 256);
 
         // Write "As" signature
-        self.encoder.write_bit_string(&mut initial_model, 'A' as u32, 8);
-        self.encoder.write_bit_string(&mut initial_model, 's' as u32, 8);
+        self.encoder
+            .write_bit_string(&mut initial_model, 'A' as u32, 8);
+        self.encoder
+            .write_bit_string(&mut initial_model, 's' as u32, 8);
 
         // Write block_bits - 9
-        self.encoder.write_bit_string(&mut initial_model, self.block_bits - 9, 4);
+        self.encoder
+            .write_bit_string(&mut initial_model, self.block_bits - 9, 4);
 
         let block_size = 1 << self.block_bits;
 
@@ -2264,7 +2306,11 @@ impl SitArsenicEncoder {
             let (bwt_data, transform_index) = burrows_wheeler_transform(block);
 
             // Write transform index
-            self.encoder.write_bit_string(&mut initial_model, transform_index as u32, self.block_bits);
+            self.encoder.write_bit_string(
+                &mut initial_model,
+                transform_index as u32,
+                self.block_bits,
+            );
 
             // MTF encode
             let mtf_data = move_to_front_encode(&bwt_data);
@@ -2332,25 +2378,32 @@ impl SitArsenicEncoder {
                     self.encoder.encode_symbol(selector_model, 2);
                 } else if val < 4 {
                     self.encoder.encode_symbol(selector_model, 3);
-                    self.encoder.encode_symbol(&mut mtf_models[0], (val - 2) as u16 + 2);
+                    self.encoder
+                        .encode_symbol(&mut mtf_models[0], (val - 2) as u16 + 2);
                 } else if val < 8 {
                     self.encoder.encode_symbol(selector_model, 4);
-                    self.encoder.encode_symbol(&mut mtf_models[1], (val - 4) as u16 + 4);
+                    self.encoder
+                        .encode_symbol(&mut mtf_models[1], (val - 4) as u16 + 4);
                 } else if val < 16 {
                     self.encoder.encode_symbol(selector_model, 5);
-                    self.encoder.encode_symbol(&mut mtf_models[2], (val - 8) as u16 + 8);
+                    self.encoder
+                        .encode_symbol(&mut mtf_models[2], (val - 8) as u16 + 8);
                 } else if val < 32 {
                     self.encoder.encode_symbol(selector_model, 6);
-                    self.encoder.encode_symbol(&mut mtf_models[3], (val - 16) as u16 + 16);
+                    self.encoder
+                        .encode_symbol(&mut mtf_models[3], (val - 16) as u16 + 16);
                 } else if val < 64 {
                     self.encoder.encode_symbol(selector_model, 7);
-                    self.encoder.encode_symbol(&mut mtf_models[4], (val - 32) as u16 + 32);
+                    self.encoder
+                        .encode_symbol(&mut mtf_models[4], (val - 32) as u16 + 32);
                 } else if val < 128 {
                     self.encoder.encode_symbol(selector_model, 8);
-                    self.encoder.encode_symbol(&mut mtf_models[5], (val - 64) as u16 + 64);
+                    self.encoder
+                        .encode_symbol(&mut mtf_models[5], (val - 64) as u16 + 64);
                 } else {
                     self.encoder.encode_symbol(selector_model, 9);
-                    self.encoder.encode_symbol(&mut mtf_models[6], (val - 128) as u16 + 128);
+                    self.encoder
+                        .encode_symbol(&mut mtf_models[6], (val - 128) as u16 + 128);
                 }
                 i += 1;
             }
@@ -2526,13 +2579,13 @@ impl<'a> SitArsenicDecoder<'a> {
             }
 
             let mut transform = vec![0usize; block.len()];
-            
+
             // Optimized 4-way parallel histogram to reduce cache conflicts
             let mut counts0 = [0usize; 256];
             let mut counts1 = [0usize; 256];
             let mut counts2 = [0usize; 256];
             let mut counts3 = [0usize; 256];
-            
+
             let chunks = block.chunks_exact(4);
             let remainder = chunks.remainder();
             for chunk in chunks {
@@ -2544,13 +2597,13 @@ impl<'a> SitArsenicDecoder<'a> {
             for &b in remainder {
                 counts0[b as usize] += 1;
             }
-            
+
             // Merge counts
             let mut counts = [0usize; 256];
             for i in 0..256 {
                 counts[i] = counts0[i] + counts1[i] + counts2[i] + counts3[i];
             }
-            
+
             // Compute prefix sums
             let mut sum = 0usize;
             let mut start_pos = [0usize; 256];
@@ -2558,7 +2611,7 @@ impl<'a> SitArsenicDecoder<'a> {
                 start_pos[i] = sum;
                 sum += counts[i];
             }
-            
+
             // Build transform vector
             let mut current_pos_in_counts = start_pos;
             for (i, &b) in block.iter().enumerate() {
@@ -2864,7 +2917,9 @@ mod tests {
 
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].name, "compress.txt");
-        let (data, _rsrc) = parsed.entries[0].decompressed_forks().expect("Should decompress");
+        let (data, _rsrc) = parsed.entries[0]
+            .decompressed_forks()
+            .expect("Should decompress");
         assert_eq!(data, content);
 
         // Verify compression actually happened (compressed smaller than uncompressed)
