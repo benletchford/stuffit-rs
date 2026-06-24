@@ -280,6 +280,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stuffit-ffi"
+version = "0.1.6"
+dependencies = [
+ "stuffit",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.111"
 source = "registry+https://github.com/rust-lang/crates.io-index"

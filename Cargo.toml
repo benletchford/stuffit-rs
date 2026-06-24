@@ -1,7 +1,7 @@
 [package]
 name = "stuffit"
-version = "0.1.6"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 authors = ["Ben Letchford <ben@letchford.cloud>"]
 description = "StuffIt (.sit) archive parser, decompressor, and creator"
 license = "MIT OR Apache-2.0"
@@ -9,6 +9,14 @@ repository = "https://github.com/benletchford/stuffit-rs"
 keywords = ["stuffit", "sit", "archive", "compression", "macintosh"]
 categories = ["compression", "encoding", "parser-implementations"]
 readme = "README.md"
+
+[workspace]
+members = ["stuffit-ffi"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.6"
+edition = "2021"
 
 [dependencies]
 log = "0.4"

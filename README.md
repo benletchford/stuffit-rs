@@ -133,6 +133,19 @@ cargo build --no-default-features
 cargo build
 ```
 
+## C ABI
+
+The [`stuffit-ffi`](stuffit-ffi) workspace crate provides a versioned C API,
+shared and static libraries, an installable header, and pkg-config metadata.
+
+```sh
+cargo build --release -p stuffit-ffi
+sudo make -C stuffit-ffi install-files PREFIX=/usr/local
+```
+
+See [`stuffit-ffi/README.md`](stuffit-ffi/README.md) for API ownership and
+installation details.
+
 ## License
 
 Licensed under either of:

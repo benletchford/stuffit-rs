@@ -1,0 +1,15 @@
+[package]
+name = "stuffit-ffi"
+version.workspace = true
+edition.workspace = true
+authors = ["Ben Letchford <ben@letchford.cloud>", "Daniel Markstedt <daniel@mindani.net>"]
+description = "C ABI for the stuffit crate"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/benletchford/stuffit-rs"
+
+[lib]
+name = "stuffit_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+stuffit = { path = "..", default-features = false }
