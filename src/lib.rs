@@ -1259,7 +1259,7 @@ impl<'a> SitLZWDecoder<'a> {
     }
 
     fn reset_block(&mut self) -> bool {
-        if !self.codes_in_block.is_multiple_of(8) {
+        if self.codes_in_block % 8 != 0 {
             let padding_codes = 8 - (self.codes_in_block % 8);
             if !self.reader.skip_bits_le(self.code_size * padding_codes) {
                 return false;

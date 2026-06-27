@@ -133,7 +133,7 @@ mod utils {
         writer.write_bits_le(256, code_size);
         codes_in_block += 1;
 
-        if !codes_in_block.is_multiple_of(8) {
+        if codes_in_block % 8 != 0 {
             for _ in 0..(8 - (codes_in_block % 8)) {
                 writer.write_bits_le(0, code_size);
             }
