@@ -18,6 +18,9 @@ resolver = "2"
 version = "0.1.6"
 edition = "2021"
 
+[workspace.dependencies]
+stuffit = { path = ".", version = "0.1.6", default-features = false }
+
 [dependencies]
 log = "0.4"
 thiserror = "2.0"

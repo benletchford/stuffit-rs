@@ -12,4 +12,4 @@ name = "stuffit_ffi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-stuffit = { path = "..", default-features = false }
+stuffit = { workspace = true, default-features = false }
