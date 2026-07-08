@@ -5,6 +5,8 @@ includedir=${prefix}/include
 
 Name: stuffit-ffi
 Description: C ABI for reading and writing classic StuffIt archives
+# x-release-please-start-version
 Version: 0.1.7
+# x-release-please-end
 Libs: -L${libdir} -lstuffit_ffi
 Cflags: -I${includedir}
