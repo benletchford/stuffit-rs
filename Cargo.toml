@@ -15,7 +15,6 @@ members = ["stuffit-ffi"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.7" # x-release-please-version
 edition = "2021"
 
 [workspace.dependencies]
