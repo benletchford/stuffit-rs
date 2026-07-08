@@ -136,7 +136,8 @@ cargo build
 ## C ABI
 
 The [`stuffit-ffi`](stuffit-ffi) workspace crate provides a versioned C API,
-shared and static libraries, an installable header, and pkg-config metadata.
+a shared library, optional static library installation, an installable header,
+and pkg-config metadata.
 
 ```sh
 cargo build --release -p stuffit-ffi

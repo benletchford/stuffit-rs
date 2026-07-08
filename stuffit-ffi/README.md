@@ -1,8 +1,8 @@
 # stuffit-ffi
 
 `stuffit-ffi` exposes the `stuffit` Rust crate through a small, versioned C ABI.
-It builds both shared and static libraries and ships a C header and pkg-config
-metadata.
+It builds a shared library, optionally installs a static library when one is
+produced, and ships a C header and pkg-config metadata.
 
 ## Build
 
@@ -20,7 +20,8 @@ cargo build --release -p stuffit-ffi
 sudo make -C stuffit-ffi install-files PREFIX=/usr/local DESTDIR=/optional/staging/root
 ```
 
-This installs the shared and static libraries plus:
+This installs the shared library, the static library when Cargo produced one,
+and:
 
 ```text
 include/stuffit_ffi.h       -> ${prefix}/include/stuffit_ffi.h
@@ -30,6 +31,10 @@ pkgconfig/stuffit-ffi.pc    -> ${prefix}/lib/pkgconfig/stuffit-ffi.pc
 From the repository root, `make -C stuffit-ffi install` can also build and
 install in one step. Use `install-files` after a separate build when installing
 to a privileged prefix so Cargo does not need to run under `sudo`.
+
+Set `INSTALL_STATIC=yes` to require the static library install, or
+`INSTALL_STATIC=no` to skip it explicitly. The default, `INSTALL_STATIC=auto`,
+installs the static library only when the platform toolchain produced it.
 
 The pkg-config file is relocatable, so it derives `prefix` from its installed
 location. A downstream project can then use:

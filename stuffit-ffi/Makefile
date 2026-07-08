@@ -1,6 +1,7 @@
 PREFIX ?= /usr/local
 DESTDIR ?=
 CARGO ?= cargo
+INSTALL_STATIC ?= auto
 
 TARGET_DIR := ../target/release
 STATIC_LIB := $(TARGET_DIR)/libstuffit_ffi.a
@@ -20,7 +21,15 @@ install: all install-files
 
 install-files:
 	install -d "$(DESTDIR)$(PREFIX)/lib/pkgconfig" "$(DESTDIR)$(PREFIX)/include"
-	install -m 644 "$(STATIC_LIB)" "$(DESTDIR)$(PREFIX)/lib/"
+	if [ "$(INSTALL_STATIC)" = yes ]; then \
+		install -m 644 "$(STATIC_LIB)" "$(DESTDIR)$(PREFIX)/lib/"; \
+	elif [ "$(INSTALL_STATIC)" = auto ] && [ -f "$(STATIC_LIB)" ]; then \
+		install -m 644 "$(STATIC_LIB)" "$(DESTDIR)$(PREFIX)/lib/"; \
+	elif [ "$(INSTALL_STATIC)" = auto ]; then \
+		echo "Skipping missing static library: $(STATIC_LIB)"; \
+	else \
+		echo "Skipping static library install"; \
+	fi
 	install -m 755 "$(SHARED_LIB)" "$(DESTDIR)$(PREFIX)/lib/"
 ifeq ($(UNAME_S),Darwin)
 	install_name_tool -id "$(PREFIX)/lib/libstuffit_ffi.dylib" \
