@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      prs_created: ${{ steps.release.outputs.prs_created }}
+      pr: ${{ steps.release.outputs.pr }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # release-please bumps the versions in Cargo.toml but knows nothing about
+  # Cargo.lock, so regenerate the workspace entries on the release PR branch.
+  sync-lockfile:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.prs_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Update Cargo.lock and push to the release PR
+        run: |
+          cargo update --workspace
+          if ! git diff --quiet Cargo.lock; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Cargo.lock
+            git commit -m "chore: sync Cargo.lock with release versions"
+            git push
+          fi
+
+  publish-crates:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # stuffit must land first: stuffit-ffi's publish verification builds
+      # against the registry copy, and cargo waits for the index to update.
+      - run: cargo publish -p stuffit
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - run: cargo publish -p stuffit-ffi
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  upload-tarballs:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --workspace --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euxo pipefail
+          VERSION="${TAG#v}"
+          PKG="stuffit-${VERSION}-${TARGET}"
+          OUT="target/${TARGET}/release"
+          mkdir -p "dist/${PKG}/bin" "dist/${PKG}/lib/pkgconfig" "dist/${PKG}/include"
+          cp README.md "dist/${PKG}/"
+          cp stuffit-ffi/include/stuffit_ffi.h "dist/${PKG}/include/"
+          if [[ "${TARGET}" == *windows* ]]; then
+            cp "${OUT}/stuffit.exe" "dist/${PKG}/bin/"
+            cp "${OUT}/stuffit_ffi.dll" "${OUT}/stuffit_ffi.dll.lib" "${OUT}/stuffit_ffi.lib" "dist/${PKG}/lib/"
+            rm -r "dist/${PKG}/lib/pkgconfig"
+            (cd dist && 7z a "${PKG}.zip" "${PKG}")
+            echo "ASSET=dist/${PKG}.zip" >> "${GITHUB_ENV}"
+          else
+            cp "${OUT}/stuffit" "dist/${PKG}/bin/"
+            cp "${OUT}/libstuffit_ffi.a" "dist/${PKG}/lib/"
+            cp "${OUT}"/libstuffit_ffi.so "dist/${PKG}/lib/" 2>/dev/null \
+              || cp "${OUT}"/libstuffit_ffi.dylib "dist/${PKG}/lib/"
+            cp stuffit-ffi/pkgconfig/stuffit-ffi.pc "dist/${PKG}/lib/pkgconfig/"
+            tar -C dist -czf "dist/${PKG}.tar.gz" "${PKG}"
+            echo "ASSET=dist/${PKG}.tar.gz" >> "${GITHUB_ENV}"
+          fi
+      - name: Upload to the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release upload "${TAG}" "${ASSET}"
