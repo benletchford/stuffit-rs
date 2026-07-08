@@ -99,7 +99,7 @@ jobs:
           PKG="stuffit-${VERSION}-${TARGET}"
           OUT="target/${TARGET}/release"
           mkdir -p "dist/${PKG}/bin" "dist/${PKG}/lib/pkgconfig" "dist/${PKG}/include"
-          cp README.md "dist/${PKG}/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "dist/${PKG}/"
           cp stuffit-ffi/include/stuffit_ffi.h "dist/${PKG}/include/"
           if [[ "${TARGET}" == *windows* ]]; then
             cp "${OUT}/stuffit.exe" "dist/${PKG}/bin/"
