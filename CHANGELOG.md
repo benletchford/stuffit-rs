@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/benletchford/stuffit-rs/compare/v0.1.8...v0.2.0) (2026-07-09)
+
+
+### Features
+
+* preserve file and folder timestamps when archiving and extracting ([a8002ab](https://github.com/benletchford/stuffit-rs/commit/a8002ab9842b6607e335d92401fe3ae0da520258)), closes [#11](https://github.com/benletchford/stuffit-rs/issues/11)
+
 ## [0.1.8](https://github.com/benletchford/stuffit-rs/compare/v0.1.7...v0.1.8) (2026-07-08)
 
 
