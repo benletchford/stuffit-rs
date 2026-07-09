@@ -391,6 +391,94 @@ mod legacy_compression {
 }
 
 // ============================================================================
+// Timestamp Tests
+// ============================================================================
+
+mod timestamps {
+    use super::*;
+    use utils::*;
+
+    /// SIT! classic entry headers store the creation date at bytes 76-79 and
+    /// the modification date at bytes 80-83, for folders and files alike.
+    #[test]
+    fn test_classic_timestamps() {
+        let mut data = Vec::new();
+
+        // Archive header (22 bytes)
+        data.extend_from_slice(b"SIT!");
+        data.extend_from_slice(&[0, 2]); // 2 files
+
+        // Folder start marker
+        let mut folder_header = vec![0u8; 112];
+        folder_header[0] = 0x20; // rsrc method: folder start
+        folder_header[1] = 0x20; // data method: folder start
+        folder_header[2] = 3; // filename length
+        folder_header[3..6].copy_from_slice(b"Dir");
+        folder_header[76..80].copy_from_slice(&0xd0000001u32.to_be_bytes());
+        folder_header[80..84].copy_from_slice(&0xd0000002u32.to_be_bytes());
+        let crc = crc16(&folder_header[0..110]);
+        folder_header[110..112].copy_from_slice(&crc.to_be_bytes());
+
+        // File inside the folder, stored uncompressed
+        let contents = b"hi";
+        let mut file_header = vec![0u8; 112];
+        file_header[2] = 8; // filename length
+        file_header[3..11].copy_from_slice(b"file.txt");
+        file_header[76..80].copy_from_slice(&0xd1111111u32.to_be_bytes());
+        file_header[80..84].copy_from_slice(&0xd2222222u32.to_be_bytes());
+        file_header[88..92].copy_from_slice(&(contents.len() as u32).to_be_bytes());
+        file_header[96..100].copy_from_slice(&(contents.len() as u32).to_be_bytes());
+        let crc = crc16(&file_header[0..110]);
+        file_header[110..112].copy_from_slice(&crc.to_be_bytes());
+
+        // Folder end marker
+        let mut end_header = vec![0u8; 112];
+        end_header[0] = 0x21;
+        end_header[1] = 0x21;
+        let crc = crc16(&end_header[0..110]);
+        end_header[110..112].copy_from_slice(&crc.to_be_bytes());
+
+        let total_size: u32 = 22 + 3 * 112 + contents.len() as u32;
+        data.extend_from_slice(&total_size.to_be_bytes());
+        data.extend_from_slice(&[0u8; 12]); // padding
+        data.extend_from_slice(&folder_header);
+        data.extend_from_slice(&file_header);
+        data.extend_from_slice(contents);
+        data.extend_from_slice(&end_header);
+
+        let archive = SitArchive::parse(&data).expect("Failed to parse classic archive");
+        assert_eq!(archive.entries.len(), 2);
+
+        assert_eq!(archive.entries[0].name, "Dir");
+        assert!(archive.entries[0].is_folder);
+        assert_eq!(archive.entries[0].creation_date, 0xd0000001);
+        assert_eq!(archive.entries[0].modification_date, 0xd0000002);
+
+        assert_eq!(archive.entries[1].name, "Dir/file.txt");
+        assert_eq!(archive.entries[1].creation_date, 0xd1111111);
+        assert_eq!(archive.entries[1].modification_date, 0xd2222222);
+    }
+
+    /// The SIT5 fixtures were generated when the writer hardcoded
+    /// 0xd256a35a (2015-10-28T16:07:54Z) for both dates; parsing must
+    /// surface that value.
+    #[test]
+    fn test_sit5_fixture_timestamps() {
+        let path = Path::new(FIXTURES_DIR).join("test_m13.sit");
+        let data = fs::read(&path).expect("test_m13.sit fixture missing");
+        let archive = SitArchive::parse(&data).expect("Failed to parse fixture");
+
+        assert_eq!(archive.entries.len(), 1);
+        assert_eq!(archive.entries[0].creation_date, 0xd256a35a);
+        assert_eq!(archive.entries[0].modification_date, 0xd256a35a);
+        assert_eq!(
+            stuffit::mac_time_to_unix(archive.entries[0].modification_date),
+            1_446_048_474
+        );
+    }
+}
+
+// ============================================================================
 // Encoding Tests
 // ============================================================================
 
@@ -542,9 +630,9 @@ Archive: tests/fixtures/test_m13.sit
 Format: StuffIt 5.0
 Entries: 1
 
-Name                                               Type     Data       Resource   Type   Creator
-----------------------------------------------------------------------------------------------------
-hello_m13.txt                                      File     86*        0*         TEXT   ttxt  
+Name                                               Type     Data       Resource   Modified             Type   Creator
+--------------------------------------------------------------------------------------------------------------------
+hello_m13.txt                                      File     86*        0*         2015-10-28 16:07:54  TEXT   ttxt  
 
 * = compressed size (use data_ulen/rsrc_ulen for uncompressed)
 Done.
@@ -554,6 +642,84 @@ Done.
             expected.trim(),
             "Verbose list output mismatch"
         );
+    }
+
+    /// End-to-end: mtimes survive `archive` then `extract`.
+    #[test]
+    fn test_archive_extract_preserves_timestamps() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        let binary = get_binary_path();
+        let root = std::env::temp_dir().join(format!("stuffit_ts_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let src = root.join("Data");
+        std::fs::create_dir_all(src.join("Sub")).unwrap();
+        std::fs::write(src.join("file.txt"), b"timestamped").unwrap();
+        std::fs::write(src.join("Sub").join("nested.txt"), b"nested").unwrap();
+
+        let file_time = UNIX_EPOCH + Duration::from_secs(999_999_999);
+        let nested_time = UNIX_EPOCH + Duration::from_secs(1_234_567_890);
+        set_mtime(&src.join("file.txt"), file_time);
+        set_mtime(&src.join("Sub").join("nested.txt"), nested_time);
+
+        // Directory mtimes are only set portably on Unix in this test;
+        // extraction itself handles directories on all platforms.
+        #[cfg(unix)]
+        let folder_time = UNIX_EPOCH + Duration::from_secs(888_888_888);
+        #[cfg(unix)]
+        set_mtime(&src.join("Sub"), folder_time);
+
+        let archive_path = root.join("out.sit");
+        let status = Command::new(&binary)
+            .arg("archive")
+            .arg("-o")
+            .arg(&archive_path)
+            .arg(&src)
+            .status()
+            .expect("Failed to run archive command");
+        assert!(status.success());
+
+        // The archive itself records the timestamps.
+        let data = std::fs::read(&archive_path).unwrap();
+        let parsed = stuffit::SitArchive::parse(&data).unwrap();
+        let file_entry = parsed
+            .entries
+            .iter()
+            .find(|e| e.name == "Data/file.txt")
+            .expect("file entry missing from archive");
+        assert_eq!(file_entry.modification_time(), Some(file_time));
+
+        let dst = root.join("extracted");
+        let status = Command::new(&binary)
+            .arg("extract")
+            .arg(&archive_path)
+            .arg("-o")
+            .arg(&dst)
+            .status()
+            .expect("Failed to run extract command");
+        assert!(status.success());
+
+        let mtime = |p: &std::path::Path| std::fs::metadata(p).unwrap().modified().unwrap();
+        assert_eq!(mtime(&dst.join("Data").join("file.txt")), file_time);
+        assert_eq!(
+            mtime(&dst.join("Data").join("Sub").join("nested.txt")),
+            nested_time
+        );
+        #[cfg(unix)]
+        assert_eq!(mtime(&dst.join("Data").join("Sub")), folder_time);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn set_mtime(path: &std::path::Path, time: std::time::SystemTime) {
+        // A read-only handle is enough for futimens on Unix; Windows needs
+        // write access (only regular files get their mtime set here).
+        #[cfg(unix)]
+        let file = std::fs::File::open(path).unwrap();
+        #[cfg(not(unix))]
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(time).unwrap();
     }
 
     #[test]
@@ -652,18 +818,18 @@ Archive: tests/fixtures/test_complex.sit
 Format: StuffIt 5.0
 Entries: 10
 
-Name                                               Type     Data       Resource   Type   Creator
-----------------------------------------------------------------------------------------------------
-README.txt                                         File     89*        0*         TEXT   ttxt  
-config.json                                        File     34*        0*         TEXT   ttxt  
-Documents                                          Folder   0          0          {}   {}  
-Documents/letter.txt                               File     59*        0*         TEXT   ttxt  
-Documents/report.txt                               File     63*        0*         TEXT   ttxt  
-Documents/Archive                                  Folder   0          0          {}   {}  
-Documents/Archive/old.txt                          File     30*        0*         TEXT   ttxt  
-Images                                             Folder   0          0          {}   {}  
-Images/photo.jpg                                   File     4*         0*         JPEG   prvw  
-App.rsrc                                           File     26*        44*        APPL   TEST  
+Name                                               Type     Data       Resource   Modified             Type   Creator
+--------------------------------------------------------------------------------------------------------------------
+README.txt                                         File     89*        0*         2015-10-28 16:07:54  TEXT   ttxt  
+config.json                                        File     34*        0*         2015-10-28 16:07:54  TEXT   ttxt  
+Documents                                          Folder   0          0          2015-10-28 16:07:54  {}   {}  
+Documents/letter.txt                               File     59*        0*         2015-10-28 16:07:54  TEXT   ttxt  
+Documents/report.txt                               File     63*        0*         2015-10-28 16:07:54  TEXT   ttxt  
+Documents/Archive                                  Folder   0          0          2015-10-28 16:07:54  {}   {}  
+Documents/Archive/old.txt                          File     30*        0*         2015-10-28 16:07:54  TEXT   ttxt  
+Images                                             Folder   0          0          2015-10-28 16:07:54  {}   {}  
+Images/photo.jpg                                   File     4*         0*         2015-10-28 16:07:54  JPEG   prvw  
+App.rsrc                                           File     26*        44*        2015-10-28 16:07:54  APPL   TEST  
 
 * = compressed size (use data_ulen/rsrc_ulen for uncompressed)
 Done.

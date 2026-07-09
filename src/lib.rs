@@ -45,6 +45,7 @@ use flate2::write::DeflateEncoder;
 use flate2::Compression;
 use log::{debug, warn};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 /// Errors that can occur when working with StuffIt archives.
@@ -97,6 +98,26 @@ pub const METHOD_SIT13: u8 = 13;
 pub const METHOD_DEFLATE: u8 = 14;
 /// Compression method: BWT (Arsenic) - SIT5 only
 pub const METHOD_BWT: u8 = 15;
+
+/// Seconds between the classic Mac OS epoch (1904-01-01T00:00:00Z) and the
+/// Unix epoch (1970-01-01T00:00:00Z).
+pub const MAC_EPOCH_OFFSET: i64 = 2_082_844_800;
+
+/// Convert a classic Mac OS timestamp (seconds since 1904-01-01 UTC) to Unix
+/// seconds. The result is negative for dates before 1970.
+#[must_use]
+pub fn mac_time_to_unix(mac_time: u32) -> i64 {
+    mac_time as i64 - MAC_EPOCH_OFFSET
+}
+
+/// Convert Unix seconds to a classic Mac OS timestamp (seconds since
+/// 1904-01-01 UTC), clamped to the representable range (1904 to 2040).
+#[must_use]
+pub fn unix_time_to_mac(unix_time: i64) -> u32 {
+    unix_time
+        .saturating_add(MAC_EPOCH_OFFSET)
+        .clamp(0, u32::MAX as i64) as u32
+}
 
 /// A StuffIt archive containing multiple entries.
 ///
@@ -159,6 +180,14 @@ pub struct SitEntry {
     /// Macintosh Finder flags (e.g., invisible, has custom icon).
     pub finder_flags: u16,
 
+    /// Creation date in classic Mac OS format (seconds since 1904-01-01 UTC).
+    /// A value of 0 means "unset".
+    pub creation_date: u32,
+
+    /// Modification date in classic Mac OS format (seconds since 1904-01-01 UTC).
+    /// A value of 0 means "unset".
+    pub modification_date: u32,
+
     /// Whether the fork data is still compressed (for lazy decompression).
     pub is_compressed: bool,
 
@@ -209,6 +238,50 @@ impl SitEntry {
 
         Ok((data, rsrc))
     }
+
+    /// Creation time as a [`SystemTime`], or `None` if unset.
+    #[must_use]
+    pub fn creation_time(&self) -> Option<SystemTime> {
+        mac_time_to_system_time(self.creation_date)
+    }
+
+    /// Modification time as a [`SystemTime`], or `None` if unset.
+    #[must_use]
+    pub fn modification_time(&self) -> Option<SystemTime> {
+        mac_time_to_system_time(self.modification_date)
+    }
+
+    /// Set the creation date from a [`SystemTime`], clamping to the
+    /// representable classic Mac OS range (1904 to 2040).
+    pub fn set_creation_time(&mut self, time: SystemTime) {
+        self.creation_date = system_time_to_mac_time(time);
+    }
+
+    /// Set the modification date from a [`SystemTime`], clamping to the
+    /// representable classic Mac OS range (1904 to 2040).
+    pub fn set_modification_time(&mut self, time: SystemTime) {
+        self.modification_date = system_time_to_mac_time(time);
+    }
+}
+
+fn mac_time_to_system_time(mac_time: u32) -> Option<SystemTime> {
+    if mac_time == 0 {
+        return None;
+    }
+    let unix = mac_time_to_unix(mac_time);
+    if unix >= 0 {
+        Some(UNIX_EPOCH + Duration::from_secs(unix as u64))
+    } else {
+        Some(UNIX_EPOCH - Duration::from_secs(unix.unsigned_abs()))
+    }
+}
+
+fn system_time_to_mac_time(time: SystemTime) -> u32 {
+    let unix = match time.duration_since(UNIX_EPOCH) {
+        Ok(after) => after.as_secs().min(i64::MAX as u64) as i64,
+        Err(before) => -(before.duration().as_secs().min(i64::MAX as u64) as i64),
+    };
+    unix_time_to_mac(unix)
 }
 
 /// IBM CRC16 algorithm (polynomial 0xA001, reflected)
@@ -378,8 +451,8 @@ impl SitArchive {
         }
         data.push(flags); // flags (9)
 
-        write_u32_be(data, 0xd256a35a); // ctime (10-13)
-        write_u32_be(data, 0xd256a35a); // mtime (14-17)
+        write_u32_be(data, entry.creation_date); // ctime (10-13)
+        write_u32_be(data, entry.modification_date); // mtime (14-17)
         write_u32_be(data, prev_off); // prev_off (18-21)
         let _next_off_pos = data.len();
         data.extend_from_slice(&[0u8; 4]); // next_off placeholder (22-25)
@@ -705,6 +778,8 @@ impl SitArchive {
         const SITFH_FTYPE: usize = 66;
         const SITFH_CREATOR: usize = 70;
         const SITFH_FNDRFLAGS: usize = 74;
+        const SITFH_CREATIONDATE: usize = 76;
+        const SITFH_MODDATE: usize = 80;
         const SITFH_RSRCLENGTH: usize = 84;
         const SITFH_DATALENGTH: usize = 88;
         const SITFH_COMPRLENGTH: usize = 92;
@@ -764,6 +839,8 @@ impl SitArchive {
 
                 let finder_flags =
                     u16::from_be_bytes([header[SITFH_FNDRFLAGS], header[SITFH_FNDRFLAGS + 1]]);
+                let creation_date = read_header_u32(&header, SITFH_CREATIONDATE);
+                let modification_date = read_header_u32(&header, SITFH_MODDATE);
 
                 let full_path = if curr_path.is_empty() {
                     name.clone()
@@ -783,6 +860,8 @@ impl SitArchive {
                     data_ulen: 0,
                     rsrc_ulen: 0,
                     finder_flags,
+                    creation_date,
+                    modification_date,
                     is_compressed: false,
                     format: ArchiveFormat::Classic,
                 });
@@ -812,6 +891,8 @@ impl SitArchive {
 
             let finder_flags =
                 u16::from_be_bytes([header[SITFH_FNDRFLAGS], header[SITFH_FNDRFLAGS + 1]]);
+            let creation_date = read_header_u32(&header, SITFH_CREATIONDATE);
+            let modification_date = read_header_u32(&header, SITFH_MODDATE);
 
             let rsrc_ulen = u32::from_be_bytes([
                 header[SITFH_RSRCLENGTH],
@@ -883,6 +964,8 @@ impl SitArchive {
                 data_ulen,
                 rsrc_ulen,
                 finder_flags,
+                creation_date,
+                modification_date,
                 is_compressed: true,
                 format: ArchiveFormat::Classic,
             });
@@ -957,8 +1040,8 @@ impl SitArchive {
             cursor.seek(SeekFrom::Current(1))?; // skip reserved
             let entry_flags = read_u8(&mut cursor)?;
 
-            let _ctime = read_u32_be(&mut cursor)?;
-            let _mtime = read_u32_be(&mut cursor)?;
+            let ctime = read_u32_be(&mut cursor)?;
+            let mtime = read_u32_be(&mut cursor)?;
             let _prev_off = read_u32_be(&mut cursor)?;
             let _next_off = read_u32_be(&mut cursor)?;
 
@@ -1070,6 +1153,8 @@ impl SitArchive {
                     data_ulen: 0,
                     rsrc_ulen: 0,
                     finder_flags,
+                    creation_date: ctime,
+                    modification_date: mtime,
                     is_compressed: false,
                     format: ArchiveFormat::Sit5,
                 });
@@ -1114,6 +1199,8 @@ impl SitArchive {
                     data_ulen,
                     rsrc_ulen,
                     finder_flags,
+                    creation_date: ctime,
+                    modification_date: mtime,
                     is_compressed: true,
                     format: ArchiveFormat::Sit5,
                 });
@@ -1356,6 +1443,15 @@ fn read_u32_be<R: Read>(r: &mut R) -> Result<u32, std::io::Error> {
     let mut buf = [0u8; 4];
     r.read_exact(&mut buf)?;
     Ok(u32::from_be_bytes(buf))
+}
+
+fn read_header_u32(header: &[u8], offset: usize) -> u32 {
+    u32::from_be_bytes([
+        header[offset],
+        header[offset + 1],
+        header[offset + 2],
+        header[offset + 3],
+    ])
 }
 
 fn write_u16_be(v: &mut Vec<u8>, val: u16) {
@@ -2898,6 +2994,70 @@ mod tests {
             file_type: *b"TEXT",
             creator: *b"ttxt",
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_mac_time_conversions() {
+        // The Mac epoch is 1904-01-01, so Unix time 0 is MAC_EPOCH_OFFSET.
+        assert_eq!(mac_time_to_unix(0), -MAC_EPOCH_OFFSET);
+        assert_eq!(mac_time_to_unix(MAC_EPOCH_OFFSET as u32), 0);
+        assert_eq!(unix_time_to_mac(0), MAC_EPOCH_OFFSET as u32);
+        assert_eq!(unix_time_to_mac(mac_time_to_unix(0xd256a35a)), 0xd256a35a);
+
+        // Out-of-range Unix times clamp instead of wrapping.
+        assert_eq!(unix_time_to_mac(-MAC_EPOCH_OFFSET - 1), 0);
+        assert_eq!(unix_time_to_mac(i64::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn test_system_time_accessors() {
+        let mut entry = SitEntry::default();
+        assert_eq!(entry.creation_time(), None);
+        assert_eq!(entry.modification_time(), None);
+
+        let time = UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        entry.set_creation_time(time);
+        entry.set_modification_time(time);
+        assert_eq!(entry.creation_date, unix_time_to_mac(1_000_000_000));
+        assert_eq!(entry.creation_time(), Some(time));
+        assert_eq!(entry.modification_time(), Some(time));
+
+        // Pre-1970 dates survive the SystemTime roundtrip too.
+        let before_epoch = UNIX_EPOCH - Duration::from_secs(1_000_000);
+        entry.set_modification_time(before_epoch);
+        assert_eq!(entry.modification_time(), Some(before_epoch));
+    }
+
+    #[test]
+    fn test_timestamp_roundtrip() {
+        let mut archive = SitArchive::new();
+
+        let mut folder = SitEntry {
+            name: "Stuff".to_string(),
+            is_folder: true,
+            ..Default::default()
+        };
+        folder.creation_date = 0xd0000001;
+        folder.modification_date = 0xd0000002;
+        archive.add_entry(folder);
+
+        let mut file = text_entry("Stuff/dates.txt", b"timestamped contents");
+        file.creation_date = 0xd1111111;
+        file.modification_date = 0xd2222222;
+        archive.add_entry(file);
+
+        for method in [METHOD_STORE, METHOD_SIT13] {
+            let serialized = archive
+                .serialize_with_method(method)
+                .expect("Should serialize");
+            let parsed = SitArchive::parse(&serialized).expect("Should parse");
+
+            assert_eq!(parsed.entries.len(), 2);
+            assert_eq!(parsed.entries[0].creation_date, 0xd0000001);
+            assert_eq!(parsed.entries[0].modification_date, 0xd0000002);
+            assert_eq!(parsed.entries[1].creation_date, 0xd1111111);
+            assert_eq!(parsed.entries[1].modification_date, 0xd2222222);
         }
     }
 

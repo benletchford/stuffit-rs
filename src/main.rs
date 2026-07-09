@@ -86,10 +86,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if verbose {
                 // Detailed output with table format
                 println!(
-                    "{:<50} {:<8} {:<10} {:<10} {:<6} {:<6}",
-                    "Name", "Type", "Data", "Resource", "Type", "Creator"
+                    "{:<50} {:<8} {:<10} {:<10} {:<20} {:<6} {:<6}",
+                    "Name", "Type", "Data", "Resource", "Modified", "Type", "Creator"
                 );
-                println!("{}", "-".repeat(100));
+                println!("{}", "-".repeat(116));
 
                 for entry in &archive.entries {
                     let entry_type = if entry.is_folder { "Folder" } else { "File" };
@@ -106,10 +106,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let file_type = String::from_utf8_lossy(&entry.file_type);
                     let creator = String::from_utf8_lossy(&entry.creator);
+                    let modified = format_mac_time(entry.modification_date);
 
                     println!(
-                        "{:<50} {:<8} {:<10} {:<10} {:<6} {:<6}",
-                        entry.name, entry_type, data_size, rsrc_size, file_type, creator
+                        "{:<50} {:<8} {:<10} {:<10} {:<20} {:<6} {:<6}",
+                        entry.name, entry_type, data_size, rsrc_size, modified, file_type, creator
                     );
                 }
 
@@ -178,6 +179,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     errors.load(Ordering::Relaxed)
                 );
             }
+
+            // Third pass: apply folder timestamps only after their contents
+            // exist, since creating files inside a folder bumps its
+            // modification time.
+            for entry in &archive.entries {
+                if entry.is_folder {
+                    apply_timestamps(&output_base.join(&entry.name), entry);
+                }
+            }
         }
         Commands::Archive {
             output,
@@ -219,6 +229,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Done.");
     Ok(())
+}
+
+/// Format a classic Mac OS timestamp as a UTC "YYYY-MM-DD HH:MM:SS" string,
+/// or "-" if unset.
+fn format_mac_time(mac_time: u32) -> String {
+    if mac_time == 0 {
+        return "-".to_string();
+    }
+    let unix = stuffit::mac_time_to_unix(mac_time);
+    let days = unix.div_euclid(86_400);
+    let secs = unix.rem_euclid(86_400);
+
+    // Civil-from-days algorithm (Howard Hinnant's date algorithms).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        year,
+        month,
+        day,
+        secs / 3_600,
+        (secs / 60) % 60,
+        secs % 60
+    )
 }
 
 fn add_to_archive(
@@ -267,12 +309,13 @@ fn add_to_archive(
         #[cfg(not(target_os = "macos"))]
         let finder_flags = 0u16;
 
-        let entry = SitEntry {
+        let mut entry = SitEntry {
             name: full_name.clone(),
             is_folder: true,
             finder_flags,
             ..Default::default()
         };
+        capture_timestamps(&mut entry, path);
 
         archive.add_entry(entry);
 
@@ -325,7 +368,7 @@ fn add_to_archive(
         let (resource_fork, file_type, creator, finder_flags) =
             (Vec::new(), [0u8; 4], [0u8; 4], 0u16);
 
-        let entry = SitEntry {
+        let mut entry = SitEntry {
             name: full_name,
             data_fork,
             resource_fork,
@@ -336,10 +379,29 @@ fn add_to_archive(
             rsrc_method: method,
             ..Default::default()
         };
+        capture_timestamps(&mut entry, path);
 
         archive.add_entry(entry);
     }
     Ok(())
+}
+
+/// Record a source file or folder's creation/modification times on an
+/// archive entry. Best-effort: unreadable timestamps are left unset.
+fn capture_timestamps(entry: &mut SitEntry, path: &Path) {
+    let Ok(metadata) = path.metadata() else {
+        return;
+    };
+    if let Ok(modified) = metadata.modified() {
+        entry.set_modification_time(modified);
+    }
+    if let Ok(created) = metadata.created() {
+        entry.set_creation_time(created);
+    } else {
+        // Fall back to the modification time on filesystems that don't
+        // track creation (birth) times.
+        entry.creation_date = entry.modification_date;
+    }
 }
 
 fn extract_entry(
@@ -437,9 +499,77 @@ fn extract_entry(
                 rsrc_file.write_all(&resource_fork)?;
             }
         }
+
+        apply_timestamps(&path, entry);
     }
 
     Ok(())
+}
+
+/// Apply an entry's archived creation/modification times to the extracted
+/// file or folder. Best-effort: failures are ignored, matching how Finder
+/// metadata is applied.
+fn apply_timestamps(path: &Path, entry: &SitEntry) {
+    #[cfg(target_os = "macos")]
+    if let Some(created) = entry.creation_time() {
+        set_creation_time(path, created);
+    }
+
+    if let Some(modified) = entry.modification_time() {
+        if let Ok(file) = open_for_set_times(path) {
+            let _ = file.set_modified(modified);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn open_for_set_times(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // FILE_FLAG_BACKUP_SEMANTICS is required to obtain a directory handle.
+    fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(0x0200_0000)
+        .open(path)
+}
+
+#[cfg(not(windows))]
+fn open_for_set_times(path: &Path) -> std::io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+#[cfg(target_os = "macos")]
+fn set_creation_time(path: &Path, time: std::time::SystemTime) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(path_c) = CString::new(path.as_os_str().as_bytes()) else {
+        return;
+    };
+
+    // Mac timestamps are whole seconds, so sub-second precision is not
+    // needed for pre-1970 dates.
+    let (secs, nanos) = match time.duration_since(std::time::UNIX_EPOCH) {
+        Ok(after) => (after.as_secs() as i64, after.subsec_nanos() as i64),
+        Err(before) => (-(before.duration().as_secs() as i64), 0),
+    };
+
+    let mut attrs: libc::attrlist = unsafe { std::mem::zeroed() };
+    attrs.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+    attrs.commonattr = libc::ATTR_CMN_CRTIME;
+    let mut crtime = libc::timespec {
+        tv_sec: secs,
+        tv_nsec: nanos,
+    };
+
+    unsafe {
+        libc::setattrlist(
+            path_c.as_ptr(),
+            &mut attrs as *mut libc::attrlist as *mut libc::c_void,
+            &mut crtime as *mut libc::timespec as *mut libc::c_void,
+            std::mem::size_of::<libc::timespec>(),
+            0,
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]

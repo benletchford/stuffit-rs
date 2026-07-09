@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define STUFFIT_FFI_ABI_VERSION 1
+#define STUFFIT_FFI_ABI_VERSION 2
 #define STUFFIT_FORK_DATA 0
 #define STUFFIT_FORK_RESOURCE 1
 
@@ -41,6 +41,9 @@ typedef struct StuffitEntryInfo {
     size_t resource_len;
     uint8_t file_type[4];
     uint8_t creator[4];
+    /* Seconds since the classic Mac OS epoch (1904-01-01 UTC); 0 = unset. */
+    uint32_t creation_date;
+    uint32_t modification_date;
     uint16_t finder_flags;
     uint8_t is_folder;
     uint8_t data_method;
@@ -53,6 +56,9 @@ typedef struct StuffitNewEntry {
     StuffitBytes resource_fork;
     uint8_t file_type[4];
     uint8_t creator[4];
+    /* Seconds since the classic Mac OS epoch (1904-01-01 UTC); 0 = unset. */
+    uint32_t creation_date;
+    uint32_t modification_date;
     uint16_t finder_flags;
     uint8_t is_folder;
 } StuffitNewEntry;

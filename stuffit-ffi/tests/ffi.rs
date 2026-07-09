@@ -23,6 +23,8 @@ fn creates_and_parses_dual_fork_entry() {
             },
             file_type: [0; 4],
             creator: [0; 4],
+            creation_date: 0,
+            modification_date: 0,
             finder_flags: 0,
             is_folder: 1,
         };
@@ -43,6 +45,8 @@ fn creates_and_parses_dual_fork_entry() {
             },
             file_type: *b"APPL",
             creator: *b"TEST",
+            creation_date: 0xd1111111,
+            modification_date: 0xd2222222,
             finder_flags: 0x4000,
             is_folder: 0,
         };
@@ -63,6 +67,8 @@ fn creates_and_parses_dual_fork_entry() {
         assert_eq!(CStr::from_ptr(info.name).to_bytes(), b"Apps/Demo");
         assert_eq!(info.file_type, *b"APPL");
         assert_eq!(info.creator, *b"TEST");
+        assert_eq!(info.creation_date, 0xd1111111);
+        assert_eq!(info.modification_date, 0xd2222222);
         assert_eq!(info.finder_flags, 0x4000);
 
         let mut fork = MaybeUninit::<StuffitBytes>::uninit();
@@ -99,6 +105,8 @@ fn reports_invalid_arguments_without_unwinding() {
             },
             file_type: [0; 4],
             creator: [0; 4],
+            creation_date: 0,
+            modification_date: 0,
             finder_flags: 0,
             is_folder: 0,
         };

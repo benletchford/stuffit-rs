@@ -64,6 +64,10 @@ pub struct StuffitEntryInfo {
     pub resource_len: usize,
     pub file_type: [u8; 4],
     pub creator: [u8; 4],
+    /// Seconds since the classic Mac OS epoch (1904-01-01 UTC); 0 = unset.
+    pub creation_date: u32,
+    /// Seconds since the classic Mac OS epoch (1904-01-01 UTC); 0 = unset.
+    pub modification_date: u32,
     pub finder_flags: u16,
     pub is_folder: u8,
     pub data_method: u8,
@@ -77,6 +81,10 @@ pub struct StuffitNewEntry {
     pub resource_fork: StuffitBytes,
     pub file_type: [u8; 4],
     pub creator: [u8; 4],
+    /// Seconds since the classic Mac OS epoch (1904-01-01 UTC); 0 = unset.
+    pub creation_date: u32,
+    /// Seconds since the classic Mac OS epoch (1904-01-01 UTC); 0 = unset.
+    pub modification_date: u32,
     pub finder_flags: u16,
     pub is_folder: u8,
 }
@@ -87,6 +95,8 @@ struct Entry {
     resource_fork: Vec<u8>,
     file_type: [u8; 4],
     creator: [u8; 4],
+    creation_date: u32,
+    modification_date: u32,
     finder_flags: u16,
     is_folder: bool,
     data_method: u8,
@@ -199,6 +209,8 @@ fn convert_archive(archive: SitArchive) -> Result<StuffitArchive, FfiError> {
             resource_fork,
             file_type: entry.file_type,
             creator: entry.creator,
+            creation_date: entry.creation_date,
+            modification_date: entry.modification_date,
             finder_flags: entry.finder_flags,
             is_folder: entry.is_folder,
             data_method: entry.data_method,
@@ -283,7 +295,7 @@ unsafe fn borrowed_bytes<'a>(bytes: StuffitBytes, label: &str) -> Result<&'a [u8
 
 #[no_mangle]
 pub extern "C" fn stuffit_ffi_abi_version() -> u32 {
-    1
+    2
 }
 
 #[no_mangle]
@@ -372,6 +384,8 @@ pub unsafe extern "C" fn stuffit_archive_entry_info(
                 resource_len: entry.resource_fork.len(),
                 file_type: entry.file_type,
                 creator: entry.creator,
+                creation_date: entry.creation_date,
+                modification_date: entry.modification_date,
                 finder_flags: entry.finder_flags,
                 is_folder: u8::from(entry.is_folder),
                 data_method: entry.data_method,
@@ -465,6 +479,8 @@ pub unsafe extern "C" fn stuffit_writer_add_entry(
             resource_fork,
             file_type: entry.file_type,
             creator: entry.creator,
+            creation_date: entry.creation_date,
+            modification_date: entry.modification_date,
             is_folder: entry.is_folder != 0,
             finder_flags: entry.finder_flags,
             ..Default::default()
