@@ -1,6 +1,6 @@
 [package]
 name = "stuffit"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 authors = ["Ben Letchford <ben@letchford.cloud>"]
 description = "StuffIt (.sit) archive parser, decompressor, and creator"
@@ -18,7 +18,7 @@ resolver = "2"
 edition = "2021"
 
 [workspace.dependencies]
-stuffit = { path = ".", version = "0.2.0", default-features = false } # x-release-please-version
+stuffit = { path = ".", version = "0.2.1", default-features = false } # x-release-please-version
 
 [dependencies]
 log = "0.4"
