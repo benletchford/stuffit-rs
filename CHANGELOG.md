@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/benletchford/stuffit-rs/compare/v0.2.0...v0.2.1) (2026-08-09)
+
+
+### Bug Fixes
+
+* make C ABI installation portable to OpenIndiana ([#14](https://github.com/benletchford/stuffit-rs/issues/14)) ([734635d](https://github.com/benletchford/stuffit-rs/commit/734635d8b760a69d26f3c6a10563415f15fb4b57)), closes [#13](https://github.com/benletchford/stuffit-rs/issues/13)
+
 ## [0.2.0](https://github.com/benletchford/stuffit-rs/compare/v0.1.8...v0.2.0) (2026-07-09)
 
 
