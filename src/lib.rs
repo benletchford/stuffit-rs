@@ -1489,15 +1489,18 @@ impl<'a> BitReader<'a> {
         }
     }
 
-    // Low-Bit-First reading (used by SIT13)
+    // Low-bit-first reading used by SIT13. Classic streams may omit trailing
+    // zero bits, so reads past the compressed fork are explicitly zero-filled;
+    // the decoder's declared uncompressed length bounds total output.
     fn read_bits_le(&mut self, n: u32) -> u32 {
         if n == 0 {
             return 0;
         }
         self.fill_buf();
-        let res = (self.bit_buf & ((1 << n) - 1)) as u32;
-        self.bit_buf >>= n;
-        self.bits_in_buf -= n;
+        let res = (self.bit_buf & ((1u64 << n) - 1)) as u32;
+        let available = n.min(self.bits_in_buf);
+        self.bit_buf >>= available;
+        self.bits_in_buf -= available;
         res
     }
 
@@ -1548,8 +1551,8 @@ impl<'a> BitReader<'a> {
         res
     }
 
-    fn read_byte(&mut self) -> u8 {
-        self.read_bits_le(8) as u8
+    fn read_byte(&mut self) -> Option<u8> {
+        self.read_bits_le_checked(8).map(|byte| byte as u8)
     }
 }
 
@@ -1945,7 +1948,10 @@ impl<'a> Sit13Decoder<'a> {
             return Ok(output);
         }
 
-        let first_byte = self.reader.read_byte();
+        let first_byte = self
+            .reader
+            .read_byte()
+            .ok_or_else(|| SitError::Decompression("Unexpected end of SIT13 stream".into()))?;
         let code = (first_byte >> 4) as usize;
 
         let (first_code, second_code, offset_code) = if code == 0 {
@@ -3315,6 +3321,32 @@ mod tests {
         let bad_data = vec![0u8; 200];
         let result = SitArchive::parse(&bad_data);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bit_reader_zero_extends_unchecked_reads() {
+        let mut reader = BitReader::new(&[0b1010_0101]);
+
+        assert_eq!(reader.read_bits_le(8), 0b1010_0101);
+        assert_eq!(reader.read_bits_le(1), 0);
+        assert_eq!(reader.read_bits_le(15), 0);
+    }
+
+    #[test]
+    fn test_sit13_zero_extends_terminal_stream() {
+        let mut decoder = Sit13Decoder::new(&[0x10]);
+
+        assert_eq!(decoder.decompress(4).unwrap(), vec![0; 4]);
+    }
+
+    #[test]
+    fn test_sit13_rejects_missing_header() {
+        let mut decoder = Sit13Decoder::new(&[]);
+
+        assert!(matches!(
+            decoder.decompress(1),
+            Err(SitError::Decompression(_))
+        ));
     }
 
     #[test]
