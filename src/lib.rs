@@ -2385,6 +2385,45 @@ impl ArithmeticEncoder {
 
 // --- Arsenic Encoder (BWT + MTF + RLE + Arithmetic) ---
 
+/// Arsenic's byte-level run-length stage, the inverse of what the decoder
+/// undoes after its inverse BWT: bytes are copied through, and once four
+/// equal bytes in a row have been emitted the next symbol is a count (0-255)
+/// of further repeats, after which the run state starts over. Emits at most
+/// `cap` symbols and never splits a count from its four bytes -- if the
+/// count would not fit, the block ends after the four bytes and the rest of
+/// the run starts fresh in the next block, exactly as the decoder, which
+/// resets its run state per block, will read it. Returns the encoded block
+/// and how many input bytes it consumed.
+fn arsenic_rle_encode_block(input: &[u8], cap: usize) -> (Vec<u8>, usize) {
+    let mut out = Vec::with_capacity(cap.min(input.len() + input.len() / 4 + 1));
+    let mut i = 0;
+    while i < input.len() && out.len() < cap {
+        let byte = input[i];
+        out.push(byte);
+        i += 1;
+        let mut run = 1;
+        while i < input.len() && input[i] == byte && run < 4 && out.len() < cap {
+            out.push(byte);
+            i += 1;
+            run += 1;
+        }
+        if run == 4 {
+            if out.len() >= cap {
+                // No room for the count: the decoder ends this block with
+                // its count at four and starts the next block clean.
+                break;
+            }
+            let mut extra = 0usize;
+            while i < input.len() && input[i] == byte && extra < 255 {
+                i += 1;
+                extra += 1;
+            }
+            out.push(extra as u8);
+        }
+    }
+    (out, i)
+}
+
 struct SitArsenicEncoder {
     encoder: ArithmeticEncoder,
     block_bits: u32,
@@ -2417,11 +2456,13 @@ impl SitArsenicEncoder {
 
         let block_size = 1 << self.block_bits;
 
-        // Process data in blocks
+        // Process data in blocks. Each block is the run-length-coded form
+        // of a stretch of input, at most block_size symbols long; the
+        // decoder resets its run state at every block, and so do we.
         let mut pos = 0;
         while pos < data.len() {
-            let block_end = (pos + block_size).min(data.len());
-            let block = &data[pos..block_end];
+            let (rle_block, consumed) = arsenic_rle_encode_block(&data[pos..], block_size);
+            let block = rle_block.as_slice();
 
             // Signal more blocks
             self.encoder.encode_symbol(&mut initial_model, 0);
@@ -2456,7 +2497,7 @@ impl SitArsenicEncoder {
 
             self.encode_mtf_block(&mtf_data, &mut selector_model, &mut mtf_models);
 
-            pos = block_end;
+            pos += consumed;
         }
 
         // Signal end of data
@@ -3330,6 +3371,86 @@ mod tests {
         assert_eq!(reader.read_bits_le(8), 0b1010_0101);
         assert_eq!(reader.read_bits_le(1), 0);
         assert_eq!(reader.read_bits_le(15), 0);
+    }
+
+    #[test]
+    fn test_arsenic_roundtrip_runs_of_every_shape() {
+        // Arsenic run-length codes four equal bytes plus a count; the
+        // encoder used to skip that stage, so any run of four or more came
+        // back short (5,000 zeros as 4,000) or corrupted what followed.
+        // Cover every boundary of the scheme, in one block and across
+        // 512-byte block boundaries.
+        let mut cases: Vec<(&str, Vec<u8>)> = Vec::new();
+        for &len in &[
+            1usize, 2, 3, 4, 5, 6, 8, 258, 259, 260, 261, 300, 514, 515, 5_000,
+        ] {
+            let mut input = vec![0x41u8; len];
+            input.extend_from_slice(b"tail");
+            cases.push(("run then tail", input));
+            let mut input = b"head".to_vec();
+            input.extend(std::iter::repeat_n(0u8, len));
+            cases.push(("head then run", input));
+        }
+        // Runs of exactly four followed by an equal byte after other data,
+        // adjacent runs of different bytes, and runs straddling 512-byte
+        // block edges when block_bits == 9.
+        cases.push(("aaaa b aaaa", b"aaaabaaaa".to_vec()));
+        cases.push(("adjacent runs", b"aaaaaabbbbbbbccccccccccc".to_vec()));
+        let mut straddle = vec![7u8; 200];
+        straddle.extend((0..300u32).map(|i| (i % 7) as u8));
+        straddle.extend(vec![9u8; 700]);
+        straddle.extend(b"end");
+        cases.push(("run across block edge", straddle));
+        let mut mixed = vec![7u8; 200];
+        mixed.extend((0..3000u32).map(|i| b"abcabcabd"[(i % 9) as usize]));
+        cases.push(("mixed3200", mixed));
+
+        for (label, input) in cases {
+            for block_bits in [9u32, 17] {
+                let compressed = SitArsenicEncoder::new(block_bits).compress(&input);
+                let mut decoder = SitArsenicDecoder::new(&compressed);
+                let output = decoder.decompress(input.len()).expect("arsenic decode");
+                assert!(
+                    output == input,
+                    "{label} (len {}, block_bits {block_bits}): decoded {} bytes, first difference at {:?}",
+                    input.len(),
+                    output.len(),
+                    output.iter().zip(&input).position(|(a, b)| a != b)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_arsenic_rle_block_matches_the_decoder_contract() {
+        // Four bytes then a count of further repeats (0-255), state reset
+        // after the count; a run of three is passed through untouched.
+        assert_eq!(arsenic_rle_encode_block(b"aaa", 1024).0, b"aaa");
+        assert_eq!(arsenic_rle_encode_block(b"aaaa", 1024).0, b"aaaa\x00");
+        assert_eq!(
+            arsenic_rle_encode_block(b"aaaaa", 1024).0,
+            b"aaaaa"
+                .iter()
+                .take(4)
+                .copied()
+                .chain([1u8])
+                .collect::<Vec<_>>()
+        );
+        let long = vec![b'z'; 4 + 255 + 4 + 2];
+        assert_eq!(
+            arsenic_rle_encode_block(&long, 1024).0,
+            [b"zzzz\xff".as_slice(), b"zzzz\x02"].concat()
+        );
+        // A count never straddles a block boundary: with room for exactly
+        // four symbols the block ends after them and consumes only them.
+        assert_eq!(
+            arsenic_rle_encode_block(b"aaaaaa", 4),
+            (b"aaaa".to_vec(), 4)
+        );
+        assert_eq!(
+            arsenic_rle_encode_block(b"aaaaaa", 5),
+            (b"aaaa\x02".to_vec(), 6)
+        );
     }
 
     #[test]
