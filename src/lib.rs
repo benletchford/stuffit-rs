@@ -2689,7 +2689,10 @@ impl<'a> SitArsenicDecoder<'a> {
                 self.decoder.read_bit_string(&mut initial_model, block_bits) as usize;
 
             let mut block = Vec::with_capacity(block_size);
-            let mut mtf = (0..=255u8).collect::<Vec<_>>();
+            // Move-to-front list. Fetching index `symbol` and moving it to
+            // the head is a memmove of `symbol` bytes -- and MTF exists
+            // precisely so that `symbol` is usually tiny.
+            let mut mtf: [u8; 256] = std::array::from_fn(|index| index as u8);
 
             loop {
                 let sel = self.decoder.next_symbol(&mut selector_model);
@@ -2720,8 +2723,9 @@ impl<'a> SitArsenicDecoder<'a> {
                             .next_symbol(&mut mtf_models[current_sel as usize - 3])
                             as usize
                     };
-                    let val = mtf.remove(symbol);
-                    mtf.insert(0, val);
+                    let val = mtf[symbol];
+                    mtf.copy_within(0..symbol, 1);
+                    mtf[0] = val;
                     block.push(val);
                 } else if sel == 10 {
                     break;
@@ -2731,13 +2735,17 @@ impl<'a> SitArsenicDecoder<'a> {
                     } else {
                         self.decoder.next_symbol(&mut mtf_models[sel as usize - 3]) as usize
                     };
-                    let val = mtf.remove(symbol);
-                    mtf.insert(0, val);
+                    let val = mtf[symbol];
+                    mtf.copy_within(0..symbol, 1);
+                    mtf[0] = val;
                     block.push(val);
                 }
             }
 
-            if transform_index_start >= block.len() {
+            // A block is at most 2^block_bits <= 2^24 symbols; a longer one
+            // (corrupt stream) cannot be walked with the packed transform
+            // below and is treated like a corrupt start index.
+            if transform_index_start >= block.len() || block.len() > (1 << 24) {
                 break;
             }
 
@@ -2746,7 +2754,11 @@ impl<'a> SitArsenicDecoder<'a> {
                 m.reset();
             }
 
-            let mut transform = vec![0usize; block.len()];
+            // Inverse transform table, one u32 per position: the successor
+            // index in the high 24 bits (blocks hold at most 2^24 symbols)
+            // and the byte found there in the low 8, so the random walk
+            // below touches one cache line per output byte instead of two.
+            let mut transform = vec![0u32; block.len()];
 
             // Optimized 4-way parallel histogram to reduce cache conflicts
             let mut counts0 = [0usize; 256];
@@ -2783,7 +2795,7 @@ impl<'a> SitArsenicDecoder<'a> {
             // Build transform vector
             let mut current_pos_in_counts = start_pos;
             for (i, &b) in block.iter().enumerate() {
-                transform[current_pos_in_counts[b as usize]] = i;
+                transform[current_pos_in_counts[b as usize]] = ((i as u32) << 8) | u32::from(b);
                 current_pos_in_counts[b as usize] += 1;
             }
 
@@ -2800,8 +2812,9 @@ impl<'a> SitArsenicDecoder<'a> {
                     output.push(last);
                     repeat -= 1;
                 } else {
-                    idx = transform[idx];
-                    let mut b = block[idx];
+                    let entry = transform[idx];
+                    idx = (entry >> 8) as usize;
+                    let mut b = entry as u8;
 
                     if randomized && rand_val == byte_count {
                         b ^= 1;
@@ -3451,6 +3464,32 @@ mod tests {
             arsenic_rle_encode_block(b"aaaaaa", 5),
             (b"aaaa\x02".to_vec(), 6)
         );
+    }
+
+    #[test]
+    fn test_arsenic_roundtrip_covers_runs_mtf_and_noise() {
+        // One encoder block holding long zero runs (the run-length and
+        // RLE-selector paths), a repetitive stretch (MTF at small indices)
+        // and noise (MTF at large indices), so the packed inverse transform,
+        // the move-to-front list and the run decoding are all exercised at
+        // a size the tiny round-trip tests never reach.
+        let mut input = Vec::with_capacity(20_000);
+        input.extend(std::iter::repeat_n(0u8, 5_000));
+        for i in 0..8_000u32 {
+            input.push(b"the quick brown fox "[(i % 20) as usize]);
+        }
+        let mut state = 0x9E37_79B9u32;
+        for _ in 0..7_000 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            input.push(state as u8);
+        }
+        let compressed = compress_arsenic(&input);
+        let mut decoder = SitArsenicDecoder::new(&compressed);
+        let output = decoder.decompress(input.len()).expect("arsenic decode");
+        assert_eq!(output.len(), input.len());
+        assert!(output == input, "arsenic round trip must be byte-identical");
     }
 
     #[test]
