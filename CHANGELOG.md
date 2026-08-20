@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.3](https://github.com/benletchford/stuffit-rs/compare/v0.2.2...v0.2.3) (2026-08-20)
+
+
+### Bug Fixes
+
+* run-length code Arsenic input before the transform ([#20](https://github.com/benletchford/stuffit-rs/issues/20)) ([b33cba7](https://github.com/benletchford/stuffit-rs/commit/b33cba7a29d358c6633496e0f3284dbd1a24f17f))
+
+
+### Performance Improvements
+
+* cheaper Arsenic move-to-front and inverse transform ([8486f9f](https://github.com/benletchford/stuffit-rs/commit/8486f9ffc6c62e0fa6ec2bdfd1182df9005056f7))
+
 ## [0.2.2](https://github.com/benletchford/stuffit-rs/compare/v0.2.1...v0.2.2) (2026-08-14)
 
 

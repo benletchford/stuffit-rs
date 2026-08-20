@@ -1,6 +1,6 @@
 [package]
 name = "stuffit-ffi"
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 authors = ["Ben Letchford <ben@letchford.cloud>", "Daniel Markstedt <daniel@mindani.net>"]
 description = "C ABI for the stuffit crate"
