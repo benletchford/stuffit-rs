@@ -2192,9 +2192,7 @@ impl ArithmeticModel {
 
     fn reset(&mut self) {
         self.total_frequency = self.num_symbols as u32 * self.increment as u32;
-        for f in &mut self.frequencies {
-            *f = self.increment;
-        }
+        self.frequencies.fill(self.increment);
     }
 
     fn update(&mut self, sym_idx: usize) {
