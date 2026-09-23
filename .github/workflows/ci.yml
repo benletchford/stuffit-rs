@@ -23,7 +23,9 @@ jobs:
       - run: cargo fmt --all --check
       # manual_is_multiple_of is allowed: u64::is_multiple_of requires Rust
       # 1.87+, and plain modulo keeps the crate building on older toolchains
-      - run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::manual_is_multiple_of
+      # as_chunks requires a newer compiler than the crate's supported baseline;
+      # older Clippy versions do not know this new lint name.
+      - run: cargo clippy --workspace --all-targets -- -D warnings -A unknown-lints -A clippy::manual_is_multiple_of -A clippy::chunks_exact_to_as_chunks
 
   test:
     strategy:
