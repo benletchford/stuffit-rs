@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/benletchford/stuffit-rs/compare/v0.2.3...v0.3.0) (2026-09-24)
+
+
+### Features
+
+* support MacBinary-wrapped StuffIt archives ([#29](https://github.com/benletchford/stuffit-rs/issues/29)) ([2a30755](https://github.com/benletchford/stuffit-rs/commit/2a307559282f24e7b98c15e565cb0669cff446d3))
+
+
+### Bug Fixes
+
+* decode classic StuffIt codebook four accurately ([#25](https://github.com/benletchford/stuffit-rs/issues/25)) ([89766c4](https://github.com/benletchford/stuffit-rs/commit/89766c4bc7ab7fe86b34bc4b583b8d060dd3a9f7))
+
 ## [0.2.3](https://github.com/benletchford/stuffit-rs/compare/v0.2.2...v0.2.3) (2026-08-20)
 
 
