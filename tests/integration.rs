@@ -4,6 +4,76 @@ use stuffit::{SitArchive, SitEntry};
 
 const FIXTURES_DIR: &str = "tests/fixtures";
 
+#[test]
+fn macbinary_wrapped_classic_archive() {
+    // Generated from test_m3_huffman.sit with a 128-byte MacBinary header.
+    // SIT5 and SIT! at offsets 65 and 69 are Finder type/creator metadata;
+    // the actual StuffIt archive begins at offset 128.
+    let wrapped = include_bytes!("fixtures/wrapped_classic.sit.bin");
+    assert_eq!(&wrapped[65..73], b"SIT5SIT!");
+    assert_eq!(&wrapped[128..132], b"SIT!");
+
+    let archive = SitArchive::parse_macbinary(wrapped).unwrap();
+    assert_eq!(archive.entries.len(), 1);
+    assert_eq!(archive.entries[0].name, "huff.txt");
+    assert_eq!(SitArchive::parse_auto(wrapped).unwrap().entries.len(), 1);
+
+    let raw = &wrapped[128..264];
+    assert_eq!(SitArchive::parse(raw).unwrap().entries.len(), 1);
+    assert_eq!(SitArchive::parse_auto(raw).unwrap().entries.len(), 1);
+    assert!(SitArchive::parse(&wrapped[69..]).is_err());
+}
+
+#[test]
+fn macbinary_rejects_truncated_data_fork() {
+    let mut wrapped = include_bytes!("fixtures/wrapped_classic.sit.bin").to_vec();
+    wrapped[83..87].copy_from_slice(&1000u32.to_be_bytes());
+    assert!(SitArchive::parse_macbinary(&wrapped).is_err());
+    wrapped[83..87].copy_from_slice(&136u32.to_be_bytes());
+    wrapped[0] = 1;
+    assert!(SitArchive::parse_macbinary(&wrapped).is_err());
+}
+
+#[test]
+fn cli_lists_macbinary_wrapped_archive() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_stuffit"))
+        .args(["list", "tests/fixtures/wrapped_classic.sit.bin"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Entries: 1"));
+    assert!(stdout.contains("huff.txt"));
+}
+
+#[test]
+fn cli_extracts_macbinary_wrapped_archive() {
+    let output_dir = std::env::temp_dir().join(format!(
+        "stuffit-macbinary-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_stuffit"))
+        .args(["extract", "tests/fixtures/wrapped_classic.sit.bin", "-o"])
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read(output_dir.join("huff.txt")).unwrap(), b"AAAAAAAA");
+    fs::remove_dir_all(output_dir).unwrap();
+}
+
 // ============================================================================
 // Shared Utilities
 // ============================================================================

@@ -69,10 +69,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let data = fs::read(input_path)?;
-            let archive = SitArchive::parse(&data)?;
+            let archive = SitArchive::parse_auto(&data)?;
 
             // Determine format
-            let format_str = if &data[0..4] == b"SIT!" {
+            let archive_bytes = if data.starts_with(b"SIT!") || data.starts_with(b"StuffIt") {
+                &data[..]
+            } else {
+                &data[128..]
+            };
+            let format_str = if archive_bytes.starts_with(b"SIT!") {
                 "SIT! 1.x"
             } else {
                 "StuffIt 5.0"
@@ -142,7 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Reading {} ({} bytes)...", input, data.len());
             }
 
-            let archive = SitArchive::parse(&data)?;
+            let archive = SitArchive::parse_auto(&data)?;
             let output_base = output
                 .as_ref()
                 .map(PathBuf::from)

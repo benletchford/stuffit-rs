@@ -17,6 +17,7 @@ file system used by classic Mac OS.
 
 - **Parse StuffIt 5.0 archives** - Read files compressed with StuffIt 5.x
 - **Parse SIT! 1.x archives** - Support for the original StuffIt format
+- **Read MacBinary-wrapped archives** - Open `.sit.bin` files with the CLI or `SitArchive::parse_auto`; use `parse_macbinary` for an explicit wrapper check
 - **Create new archives** - Build StuffIt 5.0 compatible archives
 - **Method 13 compression** - LZ77 with Huffman coding (native StuffIt)
 - **Dual-fork support** - Preserve both data and resource forks
@@ -76,6 +77,9 @@ The crate includes a command-line tool (`stuffit`) for working with StuffIt arch
 ```bash
 # Simple list (just names)
 stuffit list archive.sit
+
+# MacBinary-wrapped StuffIt archive
+stuffit list archive.sit.bin
 
 # Detailed list with metadata
 stuffit list archive.sit --verbose
