@@ -638,6 +638,36 @@ impl SitArchive {
         Err(SitError::InvalidSignature)
     }
 
+    /// Parse a StuffIt archive stored in the data fork of a MacBinary file.
+    pub fn parse_macbinary(data: &[u8]) -> Result<Self, SitError> {
+        if data.len() < 128 || data[0] != 0 || !(1..=63).contains(&data[1]) {
+            return Err(SitError::Malformed);
+        }
+
+        let data_len = u32::from_be_bytes(data[83..87].try_into().unwrap()) as usize;
+        let resource_len = u32::from_be_bytes(data[87..91].try_into().unwrap()) as usize;
+        let data_end = 128usize.checked_add(data_len).ok_or(SitError::Malformed)?;
+        let padded_data_len = data_len.checked_add(127).ok_or(SitError::Malformed)? / 128 * 128;
+        let resource_end = 128usize
+            .checked_add(padded_data_len)
+            .and_then(|offset| offset.checked_add(resource_len))
+            .ok_or(SitError::Malformed)?;
+        if data_end > data.len() || resource_end > data.len() {
+            return Err(SitError::Malformed);
+        }
+
+        Self::parse(&data[128..data_end])
+    }
+
+    /// Parse a raw StuffIt archive or a MacBinary-wrapped StuffIt archive.
+    pub fn parse_auto(data: &[u8]) -> Result<Self, SitError> {
+        if data.starts_with(b"SIT!") || data.starts_with(b"StuffIt") {
+            Self::parse(data)
+        } else {
+            Self::parse_macbinary(data)
+        }
+    }
+
     /// Parse a segmented StuffIt archive from multiple part files.
     ///
     /// Segments are typically named `archive.sit.1`, `archive.sit.2`, etc.
@@ -796,6 +826,9 @@ impl SitArchive {
         // Read archive header
         cursor.seek(SeekFrom::Start(6))?;
         let total_size = read_u32_be(&mut cursor)? as u64;
+        if total_size < 22 || total_size > data.len() as u64 {
+            return Err(SitError::Malformed);
+        }
         cursor.seek(SeekFrom::Start(22))?;
 
         let mut entries = Vec::new();
