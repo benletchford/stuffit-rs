@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/benletchford/stuffit-rs/compare/v0.3.0...v0.3.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* extract classic Icon entries on Windows ([#31](https://github.com/benletchford/stuffit-rs/issues/31)) ([a1a788c](https://github.com/benletchford/stuffit-rs/commit/a1a788c0efee93ee6c2dc3c26e06a2044a3795be))
+
 ## [0.3.0](https://github.com/benletchford/stuffit-rs/compare/v0.2.3...v0.3.0) (2026-09-24)
 
 
