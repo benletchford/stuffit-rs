@@ -74,6 +74,47 @@ fn cli_extracts_macbinary_wrapped_archive() {
     fs::remove_dir_all(output_dir).unwrap();
 }
 
+#[test]
+fn cli_extracts_wrapped_folder_icon_on_host_filesystem() {
+    let wrapped = include_bytes!("fixtures/windows_icon.sit.bin");
+    let archive = SitArchive::parse_auto(wrapped).unwrap();
+    assert_eq!(archive.entries.len(), 2);
+    assert_eq!(archive.entries[1].name, "Folder/Icon");
+
+    let output_dir = std::env::temp_dir().join(format!(
+        "stuffit-icon-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_stuffit"))
+        .args(["extract", "tests/fixtures/windows_icon.sit.bin", "-o"])
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("failed to extract"));
+
+    #[cfg(target_os = "macos")]
+    let icon_path = output_dir.join("Folder/Icon\r");
+    #[cfg(not(target_os = "macos"))]
+    let icon_path = output_dir.join("Folder/Icon");
+    assert_eq!(fs::read(&icon_path).unwrap(), b"icon data");
+
+    #[cfg(not(target_os = "macos"))]
+    assert_eq!(
+        fs::read(output_dir.join("Folder/Icon.rsrc")).unwrap(),
+        b"icon resource"
+    );
+    fs::remove_dir_all(output_dir).unwrap();
+}
+
 // ============================================================================
 // Shared Utilities
 // ============================================================================
