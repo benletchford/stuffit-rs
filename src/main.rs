@@ -414,13 +414,14 @@ fn extract_entry(
     entry: &SitEntry,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut name = entry.name.clone();
-
-    // Handle special "Icon" file used for folder icons in Classic Mac OS
-    // In archives it's often named "Icon", but on disk it must be "Icon\r"
-    if name.ends_with("/Icon") || name == "Icon" {
-        name.push('\r');
-    }
+    // Classic Mac folder icons use an Icon\r filename on macOS. A carriage
+    // return is invalid in Windows filenames, so keep the archive name there.
+    let name =
+        if cfg!(target_os = "macos") && (entry.name.ends_with("/Icon") || entry.name == "Icon") {
+            format!("{}\r", entry.name)
+        } else {
+            entry.name.clone()
+        };
 
     let path = base.join(&name);
 
