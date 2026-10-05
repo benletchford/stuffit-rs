@@ -25,6 +25,40 @@ fn macbinary_wrapped_classic_archive() {
 }
 
 #[test]
+fn installer_signature_uses_classic_archive_layout() {
+    let mut data = include_bytes!("fixtures/wrapped_classic.sit.bin")[128..264].to_vec();
+    data[..4].copy_from_slice(b"STi4");
+
+    let archive = SitArchive::parse_auto(&data).unwrap();
+    assert_eq!(archive.entries.len(), 1);
+    assert_eq!(archive.entries[0].name, "huff.txt");
+    assert_eq!(
+        archive.entries[0].decompressed_forks().unwrap().0,
+        b"AAAAAAAA"
+    );
+}
+
+#[test]
+fn malformed_classic_method_14_does_not_return_compressed_bytes() {
+    let mut data = include_bytes!("fixtures/wrapped_classic.sit.bin")[128..264].to_vec();
+    data[22 + 1] = 14;
+    let crc = utils::crc16(&data[22..132]);
+    data[132..134].copy_from_slice(&crc.to_be_bytes());
+    let archive = SitArchive::parse(&data).unwrap();
+    assert!(archive.entries[0].decompressed_forks().is_err());
+}
+
+#[test]
+fn unsupported_classic_method_returns_error() {
+    let mut data = include_bytes!("fixtures/wrapped_classic.sit.bin")[128..264].to_vec();
+    data[22 + 1] = 12;
+    let crc = utils::crc16(&data[22..132]);
+    data[132..134].copy_from_slice(&crc.to_be_bytes());
+    let archive = SitArchive::parse(&data).unwrap();
+    assert!(archive.entries[0].decompressed_forks().is_err());
+}
+
+#[test]
 fn macbinary_rejects_truncated_data_fork() {
     let mut wrapped = include_bytes!("fixtures/wrapped_classic.sit.bin").to_vec();
     wrapped[83..87].copy_from_slice(&1000u32.to_be_bytes());
