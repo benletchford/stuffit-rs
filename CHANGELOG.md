@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/benletchford/stuffit-rs/compare/v0.3.1...v0.4.0) (2026-10-05)
+
+
+### Features
+
+* **stuffit:** decode classic InstallerMaker archives ([#34](https://github.com/benletchford/stuffit-rs/issues/34)) ([726cc1b](https://github.com/benletchford/stuffit-rs/commit/726cc1b782b63e937f7289f94867acbc4535e776))
+
 ## [0.3.1](https://github.com/benletchford/stuffit-rs/compare/v0.3.0...v0.3.1) (2026-09-25)
 
 
