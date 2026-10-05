@@ -6,13 +6,13 @@
 //! # Supported Formats
 //!
 //! - **StuffIt 5.0** - The main format with signature at offset 80
-//! - **SIT! 1.x** - The original StuffIt format
+//! - **SIT! / STi4** - Classic StuffIt archives and InstallerMaker payloads
 //!
 //! # Compression Methods
 //!
 //! - **Method 0** - No compression (store)
 //! - **Method 13** - LZ77 with Huffman coding (StuffIt native)
-//! - **Method 14** - Deflate (limited support)
+//! - **Method 14** - Installer LZ77/Huffman in classic archives; Deflate in StuffIt 5
 //! - **Method 15** - Arsenic/BWT (read-only)
 //!
 //! # Example
@@ -47,6 +47,8 @@ use log::{debug, warn};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+
+mod classic_method14;
 
 /// Errors that can occur when working with StuffIt archives.
 #[derive(Error, Debug)]
@@ -627,7 +629,7 @@ impl SitArchive {
             return Err(SitError::Malformed);
         }
 
-        if &data[0..4] == b"SIT!" {
+        if data.starts_with(b"SIT!") || data.starts_with(b"STi4") {
             return Self::parse_sit_classic(data);
         }
 
@@ -661,7 +663,7 @@ impl SitArchive {
 
     /// Parse a raw StuffIt archive or a MacBinary-wrapped StuffIt archive.
     pub fn parse_auto(data: &[u8]) -> Result<Self, SitError> {
-        if data.starts_with(b"SIT!") || data.starts_with(b"StuffIt") {
+        if data.starts_with(b"SIT!") || data.starts_with(b"STi4") || data.starts_with(b"StuffIt") {
             Self::parse(data)
         } else {
             Self::parse_macbinary(data)
@@ -725,7 +727,7 @@ impl SitArchive {
         }
 
         // Check if Classic format
-        if &data[0..4] == b"SIT!" {
+        if data.starts_with(b"SIT!") || data.starts_with(b"STi4") {
             return Self::parse_classic_encrypted(data, password);
         }
 
@@ -771,10 +773,10 @@ impl SitArchive {
     }
 
     fn parse_sit_classic(data: &[u8]) -> Result<Self, SitError> {
-        // SIT! 1.x format based on XADStuffItParser.m from The Unarchiver
+        // Classic StuffIt entries share this layout under SIT! and STi4 signatures.
         //
         // Archive header (22 bytes):
-        //   0-3:   "SIT!" signature
+        //   0-3:   "SIT!" or "STi4" signature
         //   4-5:   number of files (hint, not authoritative for folders)
         //   6-9:   total archive size
         //   10-21: signature2 etc.
@@ -1292,10 +1294,10 @@ fn decompress_classic(data: &[u8], method: u8, uncomp_len: usize) -> Result<Vec<
             let mut decoder = Sit13Decoder::new(data);
             decoder.decompress(uncomp_len)
         }
-        _ => {
-            warn!("Unsupported SIT! compression method: {}", method);
-            Ok(data.to_vec())
-        }
+        14 => classic_method14::decompress(data, uncomp_len),
+        _ => Err(SitError::Decompression(format!(
+            "unsupported classic StuffIt compression method {method}"
+        ))),
     }
 }
 
